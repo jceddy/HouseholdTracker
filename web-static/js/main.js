@@ -84,7 +84,17 @@
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
         document.getElementById('household-detail-section').hidden = false;
+        // Hidden while a household's detail is open -- shown underneath the
+        // detail panel, it was easy to mistake for part of it and got in the
+        // way of the invite form.
+        document.getElementById('create-household-section').hidden = true;
         await loadMembers(householdId);
+    }
+
+    function closeHouseholdDetail() {
+        document.getElementById('household-detail-section').hidden = true;
+        document.getElementById('create-household-section').hidden = false;
+        currentHouseholdId = null;
     }
 
     async function loadMembers(householdId) {
@@ -105,8 +115,7 @@
                     body: JSON.stringify({ household_id: householdId, user_id: member.user_id }),
                 });
                 if (isSelf) {
-                    document.getElementById('household-detail-section').hidden = true;
-                    currentHouseholdId = null;
+                    closeHouseholdDetail();
                 } else {
                     await loadMembers(householdId);
                 }
@@ -166,10 +175,7 @@
         }
     });
 
-    document.getElementById('close-household-detail-button').addEventListener('click', () => {
-        document.getElementById('household-detail-section').hidden = true;
-        currentHouseholdId = null;
-    });
+    document.getElementById('close-household-detail-button').addEventListener('click', closeHouseholdDetail);
 
     await loadInvites();
     await loadHouseholds();
