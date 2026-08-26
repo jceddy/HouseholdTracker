@@ -95,7 +95,12 @@ above remains the only way migrations reach the deployed database.
   (see "LLM usage (Fireworks AI)" in `php-app/README.md`), tied to the
   authenticated user who made it, recording token counts and computed USD
   cost whether the request succeeded or failed.
+- **Households** (`0005`, issue #5): `households`, `household_members`
+  (a user's membership + role in a household — a plain join table, so a
+  user isn't limited to one household), and `household_invites` (pending
+  invites to an already-registered user; see "Household invites" in
+  `php-app/README.md`).
 
-Whatever household-tracking domain tables come next (rooms, chores,
-expenses, inventory, whatever the application actually ends up tracking)
-belong here too, as their own numbered migrations starting at `0005`.
+Whatever household-scoped tracker tables come next (chores, finances,
+calendar, whatever the application actually ends up tracking) belong here
+too, as their own numbered migrations starting at `0006`.

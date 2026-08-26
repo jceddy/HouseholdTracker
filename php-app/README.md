@@ -32,6 +32,8 @@ database.
 - `src/` — Application source (PSR-4 autoloaded under `HouseholdTracker\`).
   - `Auth/` — Registration, login, session, and password reset logic
     (`AuthService`) plus its exceptions.
+  - `Household/` — `HouseholdService` (creation, membership, invites — issue
+    #5) plus its exceptions.
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -75,11 +77,20 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/chat/models`            | —                                                  | Requires auth. Lists the model keys `POST /chat` accepts (`{"models": [string], "default_model": string}`) — see `ModelCatalog`. |
 | POST   | `/chat`                   | `{"messages": [{"role","content"}, ...], "model"?}` | Requires auth. Runs `messages` through Fireworks (default model if `model` omitted), including any tool-calling round trips (see `Tools`). `400` if `messages` is missing/empty or `model` isn't a known key, `503` if `FIREWORKS_API_KEY` isn't configured, `402` if the Fireworks account balance is exhausted, `502` on any other upstream failure. Every attempt — success or failure — is recorded to the ledger (`Chat/README` below). Returns `{"reply", "messages", "usage", "cost_usd", "model"}`; `messages` is the full updated conversation, suitable for passing back in as the next request's `messages` to continue the thread. |
 | GET    | `/chat/usage`             | —                                                  | Requires auth. The current user's own lifetime LLM usage: `{"usage": {"requestCount", "totalUsageUsd", "totalTokens", "lastUsedAt"}}`. |
+| POST   | `/households`             | `{"name"}`                                        | Requires auth. Creates a household (1-100 chars) and makes the caller its `owner`. `400` on validation failure. Returns `{"household"}`. |
+| GET    | `/households`             | —                                                  | Requires auth. Every household the caller belongs to, with their own role in each: `{"households": [{"id","name","created_at","role"}]}`. |
+| GET    | `/households/members`     | query param `household_id`                        | Requires auth; `403` if the caller isn't a member of that household. Returns `{"members": [{"user_id","username","email","role","joined_at"}]}`. |
+| POST   | `/households/invite`      | `{"household_id", "username_or_email"}`            | Requires auth; `403` if the caller isn't a member. Looks up the target by username, then email — only an already-registered account can be invited (see "Household invites" below). `404` if no such account, `409` if it's already a member or already has a pending invite, `409` if inviting yourself. |
+| GET    | `/households/invites`     | —                                                  | Requires auth. The caller's own pending invites: `{"invites": [{"id","household_id","household_name","invited_by_user_id","invited_by_username","created_at"}]}`. |
+| POST   | `/households/invites/respond` | `{"invite_id", "action": "accept"\|"decline"}` | Requires auth. `404` if there's no such pending invite addressed to the caller. Accepting adds them as a `member`. |
+| POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
-Whatever household-tracking domain routes come next belong below `/chat`
-in `public/index.php`, each guarded by the same `requireAuth($auth)` call.
+Whatever household-scoped tracker routes come next belong below
+`/households/members/remove` in `public/index.php`, each guarded by the
+same `requireAuth($auth)` call plus a household-membership check the way
+`/households/members` already is.
 
 ## Maintenance mode
 
@@ -102,6 +113,23 @@ consumed) when the visitor actually chooses a new password, via
 `POST /reset-password`. `/verify-email`, in contrast, safely consumes its
 token on a bare GET, since a verification link being opened twice (once
 by a scanner, once by the human) is harmless either way.
+
+## Household invites
+
+A user may belong to any number of households — `household_members` is a
+plain join table (household + user + role), not a column on `users`, so
+nothing forces "one household per user." Inviting only targets an already-
+registered account, looked up by username then email, the same order
+`AuthService::register()`'s own duplicate checks already use; inviting an
+unregistered email address (so the invite doubles as a registration link)
+is deferred — see issue #5's own open questions.
+
+Any member can invite someone else or remove themselves (leave); removing
+a *different* member requires being the household's `owner` — see
+`HouseholdService::removeMember()`. There's no ownership-transfer story
+yet (tracked in issue #17's own broader roles/permissions work), so for
+now an owner can also leave their own household unchallenged, same as any
+member.
 
 ## LLM usage (Fireworks AI)
 

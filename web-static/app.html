@@ -16,7 +16,41 @@
 <main>
     <h1>HouseholdTracker</h1>
     <p>Logged in as <strong id="current-username"></strong>.</p>
-    <p>This is where the household-tracking features go.</p>
+
+    <section id="invites-section" hidden>
+        <h2>Pending invites</h2>
+        <ul id="invites-list"></ul>
+    </section>
+
+    <section id="households-section">
+        <h2>Your households</h2>
+        <ul id="households-list"></ul>
+    </section>
+
+    <section id="create-household-section">
+        <h3>Create a household</h3>
+        <form id="create-household-form">
+            <label>Name
+                <input type="text" id="household-name" name="name" required maxlength="100">
+            </label>
+            <button type="submit">Create</button>
+            <p id="create-household-message" class="message" hidden></p>
+        </form>
+    </section>
+
+    <section id="household-detail-section" hidden>
+        <h3 id="household-detail-name"></h3>
+        <ul id="household-members-list"></ul>
+        <form id="invite-form">
+            <label>Invite by username or email
+                <input type="text" id="invite-username-or-email" name="username_or_email" required>
+            </label>
+            <button type="submit">Send invite</button>
+            <p id="invite-message" class="message" hidden></p>
+        </form>
+        <button id="close-household-detail-button" type="button">Close</button>
+    </section>
+
     <button id="logout-button" type="button">Log out</button>
 </main>
 <footer>
