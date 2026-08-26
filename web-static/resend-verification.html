@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+    (function () {
+        var pref = localStorage.getItem('themePreference');
+        if (pref && pref !== 'system') document.documentElement.dataset.theme = pref;
+    })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resend verification email - HouseholdTracker</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <h1>Resend verification email</h1>
+    <form id="resend-verification-form">
+        <label>Email
+            <input type="email" id="email" name="email" autocomplete="email" required>
+        </label>
+        <button type="submit">Resend email</button>
+        <p id="resend-verification-message" class="message" hidden></p>
+    </form>
+    <p class="form-links">
+        <a href="/">Back to login</a>
+    </p>
+</main>
+<footer>
+    <select id="theme-select">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+    </select>
+    <span id="app-version"></span>
+</footer>
+<script src="/js/app.js"></script>
+<script src="/js/resend-verification.js"></script>
+</body>
+</html>

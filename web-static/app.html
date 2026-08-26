@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+    (function () {
+        var pref = localStorage.getItem('themePreference');
+        if (pref && pref !== 'system') document.documentElement.dataset.theme = pref;
+    })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HouseholdTracker</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <h1>HouseholdTracker</h1>
+    <p>Logged in as <strong id="current-username"></strong>.</p>
+    <p>This is where the household-tracking features go.</p>
+    <button id="logout-button" type="button">Log out</button>
+</main>
+<footer>
+    <select id="theme-select">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+    </select>
+    <span id="app-version"></span>
+</footer>
+<script src="/js/app.js"></script>
+<script src="/js/main.js"></script>
+</body>
+</html>

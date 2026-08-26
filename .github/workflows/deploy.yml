@@ -1,0 +1,197 @@
+name: Deploy to Bluehost (production)
+
+# See "Branching & environments" in the top-level README: this is the
+# production deploy, triggered only by main -- feature work merges into
+# `development` instead (deploy-dev.yml, an otherwise-identical workflow
+# reading a separate set of DEV_-prefixed FTP/DB/APP_URL/SITE_URL
+# secrets/vars, but the same plain SMTP_* secrets below), and is promoted
+# to main only via a periodic `development` -> `main` PR.
+on:
+  push:
+    branches: [main]
+
+env:
+  # Must be >= the "php": ">=8.2" requirement in php-app/composer.json, and
+  # should match the PHP version set for your domain in cPanel's MultiPHP
+  # Manager so the deployed code actually runs the way it was built.
+  PHP_VERSION: '8.3'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      # Job-level (not step-level) so it's readable via the `env` context
+      # in a step's own `if:` below -- `secrets` itself isn't a valid
+      # named-value inside a step `if:` condition, so this is the standard
+      # workaround: stash the secret in `env` once, then gate on
+      # `env.MIGRATION_DEPLOY_KEY != ''` instead of `secrets.MIGRATION_DEPLOY_KEY != ''`.
+      MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, pdo, pdo_mysql, openssl
+          coverage: none
+
+      - name: Install PHP dependencies
+        working-directory: php-app
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Assemble deploy artifact
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          APP_URL: ${{ vars.APP_URL }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
+          SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
+          # (already in scope here without redeclaring it).
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+
+          # Static site at the domain root.
+          cp -R web-static/. dist/
+
+          # The repo-root VERSION file (see "Versioning" in the top-level
+          # README) is the single source of truth for the whole site's
+          # product version -- deployed alongside index.html so the
+          # frontend's own version indicator (web-static/js/app.js) can
+          # fetch it as a plain static file, no PHP round trip needed.
+          cp VERSION dist/VERSION
+
+          # Bust browser caches on every deploy: filenames never change
+          # between deploys, so a browser that already cached an old JS/CSS
+          # file can silently keep serving it even after the HTML
+          # referencing it is fresh. Appending the commit SHA to each
+          # reference forces a fetch of the new file.
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          find dist -name '*.html' -print0 \
+            | xargs -0 sed -i -E "s/(src|href)=\"([^\"]+\.(js|css))\"/\1=\"\2?v=${SHORT_SHA}\"/g"
+
+          # PHP app's front controller lives under /app; public/.htaccess
+          # rewrites requests to it so index.php's router still works.
+          mkdir -p dist/app
+          cp -R php-app/public/. dist/app/
+
+          # App code and dependencies, siblings of app/ so index.php's
+          # existing dirname(__DIR__) paths resolve unchanged.
+          cp -R php-app/src dist/src
+          cp -R php-app/vendor dist/vendor
+
+          # Migration files, so the "Run database migrations" step below
+          # (a POST /migrate call against the just-deployed app, which has
+          # no shell access of its own) can find them via
+          # MigrationRunner -- see database/README.md's "Applying
+          # migrations". A sibling of dist/src, matching where
+          # MigrationRunner::defaultMigrationsDir() looks for it once
+          # deployed.
+          mkdir -p dist/database
+          cp -R database/migrations dist/database/migrations
+
+          # Runtime config generated from repo secrets; never committed. Only
+          # write a line when the secret/variable is actually set, so unset
+          # optional ones fall back to Config::get()'s coded defaults
+          # instead of resolving to a literal empty string.
+          write_env_var() {
+            if [ -n "$2" ]; then
+              echo "$1=$2" >> dist/.env
+            fi
+          }
+
+          : > dist/.env
+          write_env_var DB_HOST "$DB_HOST"
+          write_env_var DB_PORT "$DB_PORT"
+          write_env_var DB_NAME "$DB_NAME"
+          write_env_var DB_USER "$DB_USER"
+          write_env_var DB_PASSWORD "$DB_PASSWORD"
+          write_env_var APP_URL "$APP_URL"
+          write_env_var SITE_URL "$SITE_URL"
+          write_env_var SMTP_HOST "$SMTP_HOST"
+          write_env_var SMTP_PORT "$SMTP_PORT"
+          write_env_var SMTP_USERNAME "$SMTP_USERNAME"
+          write_env_var SMTP_PASSWORD "$SMTP_PASSWORD"
+          write_env_var SMTP_ENCRYPTION "$SMTP_ENCRYPTION"
+          write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
+          write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
+          write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
+
+          # dist/, vendor/, src/, and database/ all end up under the shared
+          # document root (no Bluehost document-root change required), so
+          # block direct HTTP access to the files that aren't meant to be
+          # served.
+          cat > dist/.htaccess <<'HTACCESS'
+          <FilesMatch "^\.env$">
+              Require all denied
+          </FilesMatch>
+          HTACCESS
+          echo 'Require all denied' > dist/vendor/.htaccess
+          echo 'Require all denied' > dist/src/.htaccess
+          echo 'Require all denied' > dist/database/.htaccess
+
+      - name: Deploy to Bluehost via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
+          local-dir: ./dist/
+          exclude: |
+            **/.git*
+            **/.git*/**
+
+      - name: Run database migrations
+        # Both the deployed app's /migrate route AND this secret need to
+        # be present for this to do anything -- if MIGRATION_DEPLOY_KEY
+        # hasn't been set yet, this step is skipped entirely rather than
+        # curling a request that /migrate would just reject with a 403
+        # anyway, so a deploy set up before this secret existed keeps
+        # working exactly as it did before (falling back to applying
+        # database/migrations/ by hand -- see database/README.md).
+        if: ${{ vars.SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          set +e
+          http_status=$(curl -sS -o /tmp/migrate_response.txt -D /tmp/migrate_headers.txt -w "%{http_code}" -X POST \
+            -A "Mozilla/5.0 (compatible; HouseholdTrackerCD/1.0)" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
+            -d '{}' \
+            "$SITE_URL/app/migrate")
+          echo "HTTP status: $http_status"
+          echo "--- response headers ---"
+          cat /tmp/migrate_headers.txt
+          echo "--- response body ---"
+          cat /tmp/migrate_response.txt
+          echo "-------------------------"
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "Migration request failed with HTTP $http_status" >&2
+            exit 1
+          fi
+
+      - name: Smoke test deployed health endpoint
+        if: ${{ vars.SITE_URL != '' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          curl -fsS \
+            -A "Mozilla/5.0 (compatible; HouseholdTrackerCD/1.0)" \
+            -H "Accept: application/json" \
+            "$SITE_URL/app/health"
