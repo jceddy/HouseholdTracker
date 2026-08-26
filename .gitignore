@@ -1,0 +1,17 @@
+# PHP / Composer
+php-app/vendor/
+php-app/.env
+php-app/.phpunit.result.cache
+php-app/src/mail-errors.log
+php-app/src/maintenance-errors.log
+
+# Deploy artifact
+/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
