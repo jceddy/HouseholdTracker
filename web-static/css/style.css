@@ -50,7 +50,14 @@ html {
 
 body {
     margin: 0;
+    /* 100vh on mobile Chrome/Safari uses the *largest* possible viewport
+       (address bar hidden) -- while the address bar is actually showing,
+       that makes the page taller than what's visible, pushing the sticky
+       footer below the fold. 100dvh tracks the real, currently-visible
+       viewport instead; the 100vh line above it is a fallback for browsers
+       that don't support dvh. */
     min-height: 100vh;
+    min-height: 100dvh;
     background: var(--color-bg);
     color: var(--color-text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
