@@ -18,10 +18,20 @@ use HouseholdTracker\Chat\ModelCatalog;
 use HouseholdTracker\Config;
 use HouseholdTracker\Database\Connection;
 use HouseholdTracker\Database\MigrationRunner;
+use HouseholdTracker\Household\AlreadyMemberException;
+use HouseholdTracker\Household\CannotInviteSelfException;
+use HouseholdTracker\Household\HouseholdService;
+use HouseholdTracker\Household\InviteNotFoundException;
+use HouseholdTracker\Household\NotAHouseholdMemberException;
+use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
+use HouseholdTracker\Household\UserNotFoundException;
 use HouseholdTracker\Ledger\Ledger;
 use HouseholdTracker\Mail\Mailer;
 use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
+use HouseholdTracker\Repository\HouseholdInviteRepository;
+use HouseholdTracker\Repository\HouseholdMemberRepository;
+use HouseholdTracker\Repository\HouseholdRepository;
 use HouseholdTracker\Repository\PasswordResetRepository;
 use HouseholdTracker\Repository\SessionRepository;
 use HouseholdTracker\Repository\UserRepository;
@@ -490,11 +500,103 @@ if ($path === '/chat' && $method === 'POST') {
     ]);
 }
 
-// Household-tracking domain routes (rooms, chores, expenses, inventory,
-// whatever this app actually ends up tracking) go here, below the
-// account-management and LLM scaffolds above -- each new resource gets
-// its own migration in ../database/migrations, its own Repository/Service
-// pair under src/, and its own routes guarded by requireAuth($auth) the
-// same way every route below /me already is.
+// Households (issue #5): membership and invites. Every household-scoped
+// tracker that follows (chores, finances, calendar, ...) builds on top of
+// this -- its own migration in ../database/migrations, its own
+// Repository/Service pair under src/, and its own routes guarded by
+// requireAuth($auth) plus a household-membership check the same way every
+// route below already is.
+
+$households = new HouseholdService(
+    new HouseholdRepository(),
+    new HouseholdMemberRepository(),
+    new HouseholdInviteRepository(),
+    new UserRepository()
+);
+
+if ($path === '/households' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $household = $households->createHousehold((int) $currentUser['id'], (string) ($body['name'] ?? ''));
+        respond(201, ['status' => 'ok', 'household' => $household]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'households' => $households->listHouseholdsForUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/households/members' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'members' => $households->listMembers((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/invite' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $householdId = (int) ($body['household_id'] ?? 0);
+
+    try {
+        $result = $households->inviteMember($householdId, (int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
+        respond(201, [
+            'status' => 'ok',
+            'message' => 'Invite sent.',
+            'invited_user' => ['id' => (int) $result['invitedUser']['id'], 'username' => $result['invitedUser']['username']],
+        ]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (UserNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (CannotInviteSelfException | AlreadyMemberException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/invites' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'invites' => $households->listInvitesForUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/households/invites/respond' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->respondToInvite((int) $currentUser['id'], (int) ($body['invite_id'] ?? 0), (string) ($body['action'] ?? ''));
+        respond(200, ['status' => 'ok']);
+    } catch (InviteNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/members/remove' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->removeMember((int) $currentUser['id'], (int) ($body['household_id'] ?? 0), (int) ($body['user_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToRemoveMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Further household-tracking domain routes (chores, finances, calendar,
+// whatever this app actually ends up tracking) go here.
 
 respond(404, ['status' => 'error', 'message' => 'Not found']);
