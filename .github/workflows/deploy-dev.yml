@@ -67,6 +67,11 @@ jobs:
           SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
           SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
           SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          # A separate DEV_ key (unlike SMTP/MIGRATION_DEPLOY_KEY above) --
+          # this one is a cost-metered third-party API key, so dev's own
+          # usage/spend never draws against production's Fireworks balance
+          # and a leaked/misused dev key can't touch production's quota.
+          FIREWORKS_API_KEY: ${{ secrets.DEV_FIREWORKS_API_KEY }}
           # MIGRATION_DEPLOY_KEY itself comes from the job-level env above.
         run: |
           set -euo pipefail
@@ -110,6 +115,7 @@ jobs:
           write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
           write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
           write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
+          write_env_var FIREWORKS_API_KEY "$FIREWORKS_API_KEY"
 
           cat > dist/.htaccess <<'HTACCESS'
           <FilesMatch "^\.env$">

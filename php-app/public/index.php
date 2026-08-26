@@ -11,9 +11,14 @@ use HouseholdTracker\Auth\EmailNotVerifiedException;
 use HouseholdTracker\Auth\InvalidCredentialsException;
 use HouseholdTracker\Auth\InvalidPasswordResetTokenException;
 use HouseholdTracker\Auth\InvalidVerificationTokenException;
+use HouseholdTracker\Chat\ChatAgent;
+use HouseholdTracker\Chat\ChatUsageException;
+use HouseholdTracker\Chat\FireworksClient;
+use HouseholdTracker\Chat\ModelCatalog;
 use HouseholdTracker\Config;
 use HouseholdTracker\Database\Connection;
 use HouseholdTracker\Database\MigrationRunner;
+use HouseholdTracker\Ledger\Ledger;
 use HouseholdTracker\Mail\Mailer;
 use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
@@ -422,11 +427,74 @@ if ($path === '/me' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
 }
 
+// LLM usage (Fireworks AI) -- see "LLM usage (Fireworks AI)" in
+// php-app/README.md. A scaffold for whatever household-tracking features
+// end up calling an LLM: HouseholdTracker\Chat\Tools is currently an
+// empty tool registry (ChatAgent runs as a plain chat model until real
+// tools are added there), and HouseholdTracker\Chat\ModelCatalog ships
+// with one placeholder model to replace with a real Fireworks model id
+// and its published pricing before relying on this in production.
+
+if ($path === '/chat/models' && $method === 'GET') {
+    requireAuth($auth);
+    respond(200, ['status' => 'ok', 'models' => ModelCatalog::keys(), 'default_model' => ModelCatalog::DEFAULT_KEY]);
+}
+
+if ($path === '/chat/usage' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'usage' => (new Ledger())->usageForUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/chat' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+
+    $fireworksApiKey = Config::get('FIREWORKS_API_KEY', '') ?? '';
+    if ($fireworksApiKey === '') {
+        respond(503, ['status' => 'error', 'message' => 'LLM chat is not configured on this server.']);
+    }
+
+    $body = requestBody();
+    $messages = $body['messages'] ?? null;
+    if (!is_array($messages) || $messages === []) {
+        respond(400, ['status' => 'error', 'message' => 'messages (a non-empty array) is required.']);
+    }
+
+    $modelKey = (string) ($body['model'] ?? ModelCatalog::DEFAULT_KEY);
+    if (!ModelCatalog::has($modelKey)) {
+        respond(400, ['status' => 'error', 'message' => "Unknown model \"{$modelKey}\". See GET /chat/models."]);
+    }
+
+    $agent = new ChatAgent(new FireworksClient($fireworksApiKey, ModelCatalog::fireworksModel($modelKey)));
+    $ledger = new Ledger();
+
+    try {
+        $result = $agent->run($messages);
+    } catch (ChatUsageException $e) {
+        $costUsd = ModelCatalog::pricing($modelKey)->costUsd($e->usage);
+        $ledger->recordChatUsage((int) $currentUser['id'], $e->usage, $costUsd, $modelKey, success: false, errorMessage: $e->getMessage());
+
+        $status = $e->insufficientBalance ? 402 : 502;
+        respond($status, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+
+    $costUsd = ModelCatalog::pricing($modelKey)->costUsd($result['usage']);
+    $ledger->recordChatUsage((int) $currentUser['id'], $result['usage'], $costUsd, $modelKey, success: true, errorMessage: null);
+
+    respond(200, [
+        'status' => 'ok',
+        'reply' => $result['reply'],
+        'messages' => $result['messages'],
+        'usage' => $result['usage'],
+        'cost_usd' => $costUsd,
+        'model' => $modelKey,
+    ]);
+}
+
 // Household-tracking domain routes (rooms, chores, expenses, inventory,
 // whatever this app actually ends up tracking) go here, below the
-// account-management scaffold above -- each new resource gets its own
-// migration in ../database/migrations, its own Repository/Service pair
-// under src/, and its own routes guarded by requireAuth($auth) the same
-// way every route below /me already is.
+// account-management and LLM scaffolds above -- each new resource gets
+// its own migration in ../database/migrations, its own Repository/Service
+// pair under src/, and its own routes guarded by requireAuth($auth) the
+// same way every route below /me already is.
 
 respond(404, ['status' => 'error', 'message' => 'Not found']);

@@ -33,6 +33,11 @@ database.
   - `Auth/` — Registration, login, session, and password reset logic
     (`AuthService`) plus its exceptions.
   - `Repository/` — Thin PDO data-access classes, one per table.
+  - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
+    `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
+    tool-calling loop), `Tools` (the OpenAI-style function-calling
+    registry — currently empty; see "LLM usage (Fireworks AI)" below).
+  - `Ledger/` — `Ledger`, per-user LLM usage/cost tracking.
   - `Database/` — `Connection` (a lazily-created PDO singleton) and
     `MigrationRunner`.
   - `Mail/` — `Mailer`, a thin PHPMailer/SMTP wrapper.
@@ -67,11 +72,14 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/login`                  | `{"username", "password"}`                        | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`                 | —                                                  | Invalidates the current session only. |
 | GET    | `/me`                     | —                                                  | Returns the current user if authenticated, `401` otherwise. |
+| GET    | `/chat/models`            | —                                                  | Requires auth. Lists the model keys `POST /chat` accepts (`{"models": [string], "default_model": string}`) — see `ModelCatalog`. |
+| POST   | `/chat`                   | `{"messages": [{"role","content"}, ...], "model"?}` | Requires auth. Runs `messages` through Fireworks (default model if `model` omitted), including any tool-calling round trips (see `Tools`). `400` if `messages` is missing/empty or `model` isn't a known key, `503` if `FIREWORKS_API_KEY` isn't configured, `402` if the Fireworks account balance is exhausted, `502` on any other upstream failure. Every attempt — success or failure — is recorded to the ledger (`Chat/README` below). Returns `{"reply", "messages", "usage", "cost_usd", "model"}`; `messages` is the full updated conversation, suitable for passing back in as the next request's `messages` to continue the thread. |
+| GET    | `/chat/usage`             | —                                                  | Requires auth. The current user's own lifetime LLM usage: `{"usage": {"requestCount", "totalUsageUsd", "totalTokens", "lastUsedAt"}}`. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
-Whatever household-tracking domain routes come next belong below `/me` in
-`public/index.php`, each guarded by the same `requireAuth($auth)` call.
+Whatever household-tracking domain routes come next belong below `/chat`
+in `public/index.php`, each guarded by the same `requireAuth($auth)` call.
 
 ## Maintenance mode
 
@@ -94,3 +102,46 @@ consumed) when the visitor actually chooses a new password, via
 `POST /reset-password`. `/verify-email`, in contrast, safely consumes its
 token on a bare GET, since a verification link being opened twice (once
 by a scanner, once by the human) is harmless either way.
+
+## LLM usage (Fireworks AI)
+
+`POST /chat` runs a conversation through [Fireworks AI](https://fireworks.ai)'s
+OpenAI-compatible chat completions API, including a tool-calling loop
+(`ChatAgent`) — the scaffold for letting an LLM call into whatever
+household-tracking domain logic this app ends up with (e.g. "what's on
+this week's chore list?"). `src/Chat/Tools.php` is currently an empty
+registry (`definitions()` returns `[]`), so `/chat` runs as a plain chat
+model until real tools are added there — see that file's own docblock for
+the pattern (mirrors `Tools::call()`/`Tools::definitions()` in the
+[MeadBotAPI](https://github.com/jceddy/MeadBotAPI) project this scaffold
+was adapted from).
+
+**Setup:** get an API key from your [Fireworks AI account](https://fireworks.ai)
+and set it as `FIREWORKS_API_KEY` (locally, in `.env`; deployed, as a
+repository secret — see "Repository variables/secrets checklist" in the
+top-level README). Without it, `/chat` returns `503`.
+
+**Model catalog:** `src/Chat/ModelCatalog.php` ships with a single
+placeholder model (`'default'` → `llama-v3p1-8b-instruct`, at made-up
+pricing) — replace it with the actual Fireworks-hosted model(s) this app
+should offer and their current published per-1M-token rates from
+[fireworks.ai/pricing](https://fireworks.ai/pricing) before relying on
+this in production. Each model's pricing is a list of dated tiers (see
+the class's own docblock) so a future rate change can be pre-populated
+ahead of time and takes effect automatically, without a same-day deploy.
+
+**Usage tracking:** every `/chat` request — success or failure — is
+recorded to the `chat_usage` table (`Ledger::recordChatUsage()`,
+`database/migrations/0004_add_chat_usage.sql`) with its token counts and
+computed USD cost, tied to the authenticated caller. Recording is
+best-effort and never fails the request itself. `GET /chat/usage` lets a
+user see their own lifetime totals; there's no cross-user/admin view yet
+(HouseholdTracker has no admin-role concept to gate one behind) — add one
+alongside whatever role system this app eventually needs.
+
+**Cost:** Fireworks bills per API call regardless of whether the overall
+`/chat` request ultimately succeeds (e.g. a later call in a multi-tool-call
+round trip fails, or the iteration cap in `ChatAgent::MAX_TOOL_ITERATIONS`
+is hit) — `ChatUsageException` always carries whatever usage was
+accumulated before the failure, and that's what gets recorded/billed to
+the ledger even on an error response.

@@ -113,6 +113,14 @@ is considered complete.
      `deploy-dev.yml` (dev). See "Auto-applying migrations on deploy" in
      `database/README.md`; optional in the sense that skipping it just
      falls back to applying migrations by hand (step 5 below).
+   - `FIREWORKS_API_KEY` — from your [Fireworks AI account](https://fireworks.ai),
+     lets `POST /chat` run LLM requests. Unlike `MIGRATION_DEPLOY_KEY`/
+     `SMTP_*` above, dev gets its **own** key (`DEV_FIREWORKS_API_KEY`,
+     see "Development environment setup" below) rather than sharing this
+     one — it's a cost-metered third-party API key, so dev's own
+     usage/spend should never draw against production's Fireworks balance.
+     Optional: without it, `/chat` just returns `503`. See "LLM usage
+     (Fireworks AI)" in `php-app/README.md`.
 4. Optionally add these **variables** (same Settings page, "Variables"
    tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
@@ -159,7 +167,10 @@ something meaningfully different per environment.
    `deploy-dev.yml` reuses production's own `SMTP_*` secrets from step 3
    above, so if those are already set, dev's email sending already works.
    No separate `DEV_MIGRATION_DEPLOY_KEY` is needed either — `deploy-dev.yml`
-   reuses the same `MIGRATION_DEPLOY_KEY` secret.
+   reuses the same `MIGRATION_DEPLOY_KEY` secret. `DEV_FIREWORKS_API_KEY`
+   **is** its own separate key, though (see step 3 above) — a fresh one
+   from the same or a different Fireworks account, so dev usage/spend
+   stays independent of production's.
 3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
    domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
 4. Create a **separate** database for the dev domain (do not point it at
@@ -180,15 +191,17 @@ what each one does.
 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `SMTP_HOST`,
 `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_ENCRYPTION`,
 `SMTP_FROM_ADDRESS`, `SMTP_FROM_NAME`, `MIGRATION_DEPLOY_KEY` (shared with
-dev).
+dev), `FIREWORKS_API_KEY` (own key, not shared with dev — see below).
 
 **Production variables:** `FTP_SERVER_DIR`, `APP_URL`, `SITE_URL`.
 
 **Development secrets (own set, `DEV_`-prefixed):** `DEV_FTP_SERVER`,
 `DEV_FTP_USERNAME`, `DEV_FTP_PASSWORD`, `DEV_DB_HOST`, `DEV_DB_PORT`,
-`DEV_DB_NAME`, `DEV_DB_USER`, `DEV_DB_PASSWORD`. (SMTP and
-`MIGRATION_DEPLOY_KEY` are shared with production — no `DEV_` versions of
-those.)
+`DEV_DB_NAME`, `DEV_DB_USER`, `DEV_DB_PASSWORD`, `DEV_FIREWORKS_API_KEY`.
+(SMTP and `MIGRATION_DEPLOY_KEY` are shared with production — no `DEV_`
+versions of those; `FIREWORKS_API_KEY` is the one exception that does get
+its own `DEV_` version, since it's a cost-metered third-party API key —
+see "Development environment setup" above.)
 
 **Development variables:** `DEV_FTP_SERVER_DIR`, `DEV_APP_URL`,
 `DEV_SITE_URL`.

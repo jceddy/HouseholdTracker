@@ -91,7 +91,11 @@ above remains the only way migrations reach the deployed database.
   `PasswordResetRepository::consumeValid()`'s select-then-delete.
 - **Application/system** (`0003`): `schema_version` — see "Adding a new
   migration" above.
+- **LLM usage** (`0004`): `chat_usage` — one row per `POST /chat` request
+  (see "LLM usage (Fireworks AI)" in `php-app/README.md`), tied to the
+  authenticated user who made it, recording token counts and computed USD
+  cost whether the request succeeded or failed.
 
 Whatever household-tracking domain tables come next (rooms, chores,
 expenses, inventory, whatever the application actually ends up tracking)
-belong here too, as their own numbered migrations starting at `0004`.
+belong here too, as their own numbered migrations starting at `0005`.

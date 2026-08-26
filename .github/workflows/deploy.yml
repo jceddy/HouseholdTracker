@@ -57,6 +57,7 @@ jobs:
           SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
           SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
           SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
           # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
           # (already in scope here without redeclaring it).
         run: |
@@ -129,6 +130,7 @@ jobs:
           write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
           write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
           write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
+          write_env_var FIREWORKS_API_KEY "$FIREWORKS_API_KEY"
 
           # dist/, vendor/, src/, and database/ all end up under the shared
           # document root (no Bluehost document-root change required), so
