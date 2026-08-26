@@ -162,3 +162,13 @@ footer select {
     border: 1px solid var(--color-border);
     border-radius: 0.3rem;
 }
+
+/* Buy Me a Coffee's own static badge (buymeacoffee.com/jceddy) -- a plain
+   image link rather than their animated widget script, since that widget
+   is sized for a standalone placement (see MoodSwings-Web's own Resources
+   dialog) and would dominate this slim inline footer bar otherwise. */
+footer .coffee-link img {
+    display: block;
+    height: 1.75rem;
+    width: auto;
+}

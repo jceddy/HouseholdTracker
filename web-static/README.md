@@ -42,6 +42,20 @@ with `cache: 'no-store'` so a page loaded shortly after a deploy can't
 keep showing a stale, browser-cached version string. See "Versioning" in
 the top-level README.
 
+## Support
+
+Every page's `<footer>` also has an `<a class="coffee-link">` linking to
+[buymeacoffee.com/jceddy](https://www.buymeacoffee.com/jceddy), rendering
+Buy Me a Coffee's own static yellow badge image (`cdn.buymeacoffee.com/buttons/v2/default-yellow.png`,
+sized via `footer .coffee-link img` in `css/style.css`). MoodSwings-Web
+uses that same account's *animated widget script* instead — deliberately
+not reused here: that widget is sized for a standalone placement (its own
+Resources dialog there), and would dominate this app's much slimmer
+footer, which has nothing else to bundle it alongside. The repo root's
+[`.github/FUNDING.yml`](../.github/FUNDING.yml) (`buy_me_a_coffee: jceddy`)
+separately surfaces GitHub's own native "Sponsor" button on the repository
+page.
+
 ## Dark mode
 
 Three modes, chosen via a `<select id="theme-select">` in every page's own
