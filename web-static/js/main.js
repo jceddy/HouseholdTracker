@@ -28,6 +28,33 @@
         return button;
     }
 
+    // Feather-style icons (inline so there's no icon font/library dependency).
+    // aria-hidden since the button itself carries the real label via
+    // aria-label -- screen readers read that, not the SVG.
+    const EDIT_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+        + '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>'
+        + '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+    const DELETE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+        + '<polyline points="3 6 5 6 21 6"></polyline>'
+        + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>'
+        + '<line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
+
+    // buildIconButton(...) - same idea as buildButton(), but shows an icon
+    // instead of text; the text is still there for screen readers via
+    // aria-label (and as a hover tooltip via title).
+    function buildIconButton(icon, label, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-button';
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        button.innerHTML = icon;
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
     async function loadInvites() {
         const { response, body } = await apiRequest('/households/invites');
         const list = document.getElementById('invites-list');
@@ -149,7 +176,8 @@
             const label = `${note.author_username} (${note.visibility}): ${note.body}`;
             const { li, actions } = buildListItem(label);
             if (Number(note.author_user_id) === user.id) {
-                actions.appendChild(buildButton('Delete', async () => {
+                actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderNoteEditForm(li, note, householdId)));
+                actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                     await apiRequest('/households/notes/delete', {
                         method: 'POST',
                         body: JSON.stringify({ note_id: note.id }),
@@ -159,6 +187,76 @@
             }
             list.appendChild(li);
         }
+    }
+
+    // renderNoteEditForm(...) - swaps a note's list item for an inline edit
+    // form in place, rather than a separate modal/page. Cancel just
+    // re-renders the list (discarding the in-progress edit); Save posts the
+    // update and re-renders on success.
+    function renderNoteEditForm(li, note, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const textarea = document.createElement('textarea');
+        textarea.value = note.body;
+        textarea.maxLength = 20000;
+        textarea.required = true;
+
+        const checkboxLabel = document.createElement('label');
+        checkboxLabel.className = 'checkbox-label';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = note.visibility === 'private';
+        checkboxLabel.appendChild(checkbox);
+        checkboxLabel.appendChild(document.createTextNode('Private'));
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadNotes(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        row.appendChild(checkboxLabel);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+
+        form.appendChild(textarea);
+        form.appendChild(row);
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/notes/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    note_id: note.id,
+                    body: textarea.value,
+                    visibility: checkbox.checked ? 'private' : 'public',
+                }),
+            });
+
+            if (response.ok) {
+                await loadNotes(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save note.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
     }
 
     async function loadPets(householdId) {
@@ -174,7 +272,8 @@
             const details = [pet.species, pet.breed, pet.birthday].filter(Boolean).join(', ');
             const label = details ? `${pet.name} (${details})` : pet.name;
             const { li, actions } = buildListItem(label);
-            actions.appendChild(buildButton('Delete', async () => {
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderPetEditForm(li, pet, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/pets/delete', {
                     method: 'POST',
                     body: JSON.stringify({ pet_id: pet.id }),
@@ -183,6 +282,95 @@
             }));
             list.appendChild(li);
         }
+    }
+
+    // renderPetEditForm(...) - same inline-edit pattern as
+    // renderNoteEditForm(); any household member may edit a pet (a shared
+    // resource, not a per-user one), unlike notes.
+    function renderPetEditForm(li, pet, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        function textField(labelText, value, maxLength) {
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = value || '';
+            input.maxLength = maxLength;
+            label.appendChild(input);
+            form.appendChild(label);
+            return input;
+        }
+
+        const nameInput = textField('Name', pet.name, 100);
+        nameInput.required = true;
+        const speciesInput = textField('Species', pet.species, 100);
+        const breedInput = textField('Breed', pet.breed, 100);
+
+        const birthdayLabel = document.createElement('label');
+        birthdayLabel.textContent = 'Birthday';
+        const birthdayInput = document.createElement('input');
+        birthdayInput.type = 'date';
+        birthdayInput.value = pet.birthday || '';
+        birthdayLabel.appendChild(birthdayInput);
+        form.appendChild(birthdayLabel);
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = pet.notes || '';
+        notesTextarea.maxLength = 2000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadPets(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/pets/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    pet_id: pet.id,
+                    name: nameInput.value,
+                    species: speciesInput.value,
+                    breed: breedInput.value,
+                    birthday: birthdayInput.value,
+                    notes: notesTextarea.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadPets(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save pet.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
     }
 
     document.getElementById('logout-button').addEventListener('click', async () => {
