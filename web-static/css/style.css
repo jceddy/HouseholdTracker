@@ -140,6 +140,23 @@ label {
     gap: 0.3rem;
 }
 
+.form-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.form-row .checkbox-label {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+button.button--compact {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
 input {
     font: inherit;
     padding: 0.55rem 0.7rem;
