@@ -106,21 +106,29 @@
             return;
         }
 
+        const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
+
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
             const isSelf = member.user_id === user.id;
-            actions.appendChild(buildButton(isSelf ? 'Leave' : 'Remove', async () => {
-                await apiRequest('/households/members/remove', {
-                    method: 'POST',
-                    body: JSON.stringify({ household_id: householdId, user_id: member.user_id }),
-                });
-                if (isSelf) {
-                    closeHouseholdDetail();
-                } else {
-                    await loadMembers(householdId);
-                }
-                await loadHouseholds();
-            }));
+            // Only the owner can remove other members (self-leave is always
+            // allowed) -- see HouseholdService::removeMember(). A non-owner
+            // gets no button at all for other members, rather than one that
+            // just fails when clicked.
+            if (isSelf || isOwner) {
+                actions.appendChild(buildButton(isSelf ? 'Leave' : 'Remove', async () => {
+                    await apiRequest('/households/members/remove', {
+                        method: 'POST',
+                        body: JSON.stringify({ household_id: householdId, user_id: member.user_id }),
+                    });
+                    if (isSelf) {
+                        closeHouseholdDetail();
+                    } else {
+                        await loadMembers(householdId);
+                    }
+                    await loadHouseholds();
+                }));
+            }
             list.appendChild(li);
         }
     }
