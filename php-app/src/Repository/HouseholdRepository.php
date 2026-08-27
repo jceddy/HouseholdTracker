@@ -19,6 +19,12 @@ final class HouseholdRepository
         return $this->findById((int) $pdo->lastInsertId());
     }
 
+    public function updateName(int $id, string $name): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE households SET name = :name WHERE id = :id');
+        $stmt->execute(['name' => $name, 'id' => $id]);
+    }
+
     public function findById(int $id): ?array
     {
         $stmt = Connection::get()->prepare('SELECT * FROM households WHERE id = :id');

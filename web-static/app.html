@@ -48,6 +48,52 @@
             <button type="submit">Send invite</button>
             <p id="invite-message" class="message" hidden></p>
         </form>
+
+        <h4>Settings</h4>
+        <form id="household-settings-form">
+            <label>Household name
+                <input type="text" id="household-settings-name" name="name" required maxlength="100">
+            </label>
+            <button type="submit">Save</button>
+            <p id="household-settings-message" class="message" hidden></p>
+        </form>
+
+        <h4>Notes</h4>
+        <ul id="household-notes-list"></ul>
+        <form id="household-note-form">
+            <label>Note
+                <textarea id="household-note-body" name="body" required maxlength="20000"></textarea>
+            </label>
+            <label>
+                <input type="checkbox" id="household-note-public" name="public">
+                Visible to the whole household (otherwise only you can see it)
+            </label>
+            <button type="submit">Add note</button>
+            <p id="household-note-message" class="message" hidden></p>
+        </form>
+
+        <h4>Pets</h4>
+        <ul id="household-pets-list"></ul>
+        <form id="household-pet-form">
+            <label>Name
+                <input type="text" id="household-pet-name" name="name" required maxlength="100">
+            </label>
+            <label>Species
+                <input type="text" id="household-pet-species" name="species" maxlength="100">
+            </label>
+            <label>Breed
+                <input type="text" id="household-pet-breed" name="breed" maxlength="100">
+            </label>
+            <label>Birthday
+                <input type="date" id="household-pet-birthday" name="birthday">
+            </label>
+            <label>Notes
+                <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
+            </label>
+            <button type="submit">Add pet</button>
+            <p id="household-pet-message" class="message" hidden></p>
+        </form>
+
         <button id="close-household-detail-button" type="button">Close</button>
     </section>
 

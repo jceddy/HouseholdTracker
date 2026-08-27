@@ -32,8 +32,8 @@ database.
 - `src/` — Application source (PSR-4 autoloaded under `HouseholdTracker\`).
   - `Auth/` — Registration, login, session, and password reset logic
     (`AuthService`) plus its exceptions.
-  - `Household/` — `HouseholdService` (creation, membership, invites — issue
-    #5) plus its exceptions.
+  - `Household/` — `HouseholdService` (creation, membership, invites —
+    issue #5; settings, notes, and pets — issue #7) plus its exceptions.
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -84,12 +84,21 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/households/invites`     | —                                                  | Requires auth. The caller's own pending invites: `{"invites": [{"id","household_id","household_name","invited_by_user_id","invited_by_username","created_at"}]}`. |
 | POST   | `/households/invites/respond` | `{"invite_id", "action": "accept"\|"decline"}` | Requires auth. `404` if there's no such pending invite addressed to the caller. Accepting adds them as a `member`. |
 | POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else. |
+| POST   | `/households/settings`    | `{"household_id", "name"}`                        | Requires auth; `403` if the caller isn't a member. Renames the household (1-100 chars, `400` otherwise) — see "Household settings, notes, and pets" below. Returns `{"household"}`. |
+| GET    | `/households/notes`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every `public` note in the household plus the caller's own `private` ones — never another member's private notes. Returns `{"notes": [{"id","household_id","author_user_id","author_username","visibility","body","created_at","updated_at"}]}`. |
+| POST   | `/households/notes`       | `{"household_id", "visibility": "private"\|"public", "body"}` | Requires auth; `403` if the caller isn't a member. `body`: 1-20,000 chars, `400` otherwise. Returns `{"note"}`. |
+| POST   | `/households/notes/update` | `{"note_id", "visibility", "body"}`               | Requires auth. `404` if no such note; `403` unless the caller is the note's own author (public notes included — see below). |
+| POST   | `/households/notes/delete` | `{"note_id"}`                                     | Requires auth. Same `404`/`403` rules as `/households/notes/update`. |
+| GET    | `/households/pets`        | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every pet in the household — no privacy tiers, unlike notes. Returns `{"pets": [{"id","household_id","name","species","breed","birthday","notes","created_by_user_id","created_at","updated_at"}]}`. |
+| POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"pet"}`. |
+| POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
+| POST   | `/households/pets/delete` | `{"pet_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/pets/update`. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
 Whatever household-scoped tracker routes come next belong below
-`/households/members/remove` in `public/index.php`, each guarded by the
-same `requireAuth($auth)` call plus a household-membership check the way
+`/households/pets/delete` in `public/index.php`, each guarded by the same
+`requireAuth($auth)` call plus a household-membership check the way
 `/households/members` already is.
 
 ## Maintenance mode
@@ -148,6 +157,32 @@ a *different* member requires being the household's `owner` — see
 yet (tracked in issue #17's own broader roles/permissions work), so for
 now an owner can also leave their own household unchallenged, same as any
 member.
+
+## Household settings, notes, and pets
+
+Three small pieces of household-scoped data (issue #7), each requiring the
+caller to already be a member of the household in question:
+
+- **Settings** — v1 is just the household's own name; there's no dedicated
+  `household_settings` table yet, `HouseholdService::updateSettings()`
+  updates the `households.name` column directly (added a separate table
+  only once a second setting actually needs one). Any member can rename
+  the household, not just the `owner`.
+- **Notes** (`household_notes`) — two visibility tiers, `private` (only the
+  author) and `public` (every member). `GET /households/notes` filters at
+  the SQL level (`visibility = 'public' OR author_user_id = :caller_id`),
+  so a private note is never returned to anyone but its author, including
+  via a direct note id. A note, public or private, can only be edited or
+  deleted by its own author — resolving one of issue #7's own open
+  questions the same way for both tiers rather than letting any member
+  edit a public one.
+- **Pets** (`household_pets`) — unlike notes, no privacy tiers: every
+  member sees the full pet list, and any member can add, edit, or remove a
+  pet (a shared household resource, not a per-user one, same permission
+  model as settings). `vet_contact_id` is deliberately not a column yet —
+  issue #16 (household contacts) hasn't shipped, so there's nothing for it
+  to reference; add it via a follow-up migration once #16 lands rather
+  than shipping a nullable FK to a table that doesn't exist.
 
 ## LLM usage (Fireworks AI)
 

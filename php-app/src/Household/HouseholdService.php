@@ -6,18 +6,20 @@ namespace HouseholdTracker\Household;
 
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
+use HouseholdTracker\Repository\HouseholdNoteRepository;
+use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
 use HouseholdTracker\Repository\UserRepository;
 
 /**
- * Household creation, membership, and the invite flow (issues #5, #33). A
- * user may belong to any number of households (household_members has no
- * uniqueness constraint on user_id alone). Invites target either an existing
- * registered user (looked up by username then email, mirroring
- * AuthService::register()'s own validation order) or, if neither matches and
- * the input is a valid email address, an unregistered one -- that invite
- * doubles as a registration link (see inviteMember()/
- * linkPendingInvitesForEmail()).
+ * Household creation, membership, the invite flow (issues #5, #33), and
+ * household-scoped settings/notes/pets (issue #7). A user may belong to any
+ * number of households (household_members has no uniqueness constraint on
+ * user_id alone). Invites target either an existing registered user (looked
+ * up by username then email, mirroring AuthService::register()'s own
+ * validation order) or, if neither matches and the input is a valid email
+ * address, an unregistered one -- that invite doubles as a registration link
+ * (see inviteMember()/linkPendingInvitesForEmail()).
  */
 final class HouseholdService
 {
@@ -26,6 +28,8 @@ final class HouseholdService
         private readonly HouseholdMemberRepository $members,
         private readonly HouseholdInviteRepository $invites,
         private readonly UserRepository $users,
+        private readonly HouseholdNoteRepository $notes,
+        private readonly HouseholdPetRepository $pets,
     ) {
     }
 
@@ -179,6 +183,192 @@ final class HouseholdService
         }
 
         $this->members->remove($householdId, $targetUserId);
+    }
+
+    /**
+     * updateSettings(...) - v1 of "household settings" (issue #7) is just the
+     * household's own name, so this updates the households.name column
+     * directly rather than a separate key/value settings table. Any member
+     * may update it, not just the owner.
+     */
+    public function updateSettings(int $callerId, int $householdId, string $name): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        $name = trim($name);
+        if ($name === '' || strlen($name) > 100) {
+            throw new \InvalidArgumentException('Household name must be 1-100 characters.');
+        }
+
+        $this->households->updateName($householdId, $name);
+
+        return $this->households->findById($householdId);
+    }
+
+    public function listNotes(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->notes->listVisibleTo($householdId, $callerId);
+    }
+
+    public function createNote(int $callerId, int $householdId, string $visibility, string $body): array
+    {
+        $this->requireMember($householdId, $callerId);
+        [$visibility, $body] = $this->validateNoteInput($visibility, $body);
+
+        return $this->notes->create($householdId, $callerId, $visibility, $body);
+    }
+
+    /**
+     * updateNote(...)/deleteNote(...) - a note, public or private, may only
+     * be edited or deleted by its own author (open question in issue #7,
+     * resolved the same way for both visibility tiers rather than letting
+     * any member edit a public one).
+     */
+    public function updateNote(int $callerId, int $noteId, string $visibility, string $body): array
+    {
+        $this->requireOwnNote($callerId, $noteId);
+        [$visibility, $body] = $this->validateNoteInput($visibility, $body);
+        $this->notes->update($noteId, $visibility, $body);
+
+        return $this->notes->findById($noteId);
+    }
+
+    public function deleteNote(int $callerId, int $noteId): void
+    {
+        $this->requireOwnNote($callerId, $noteId);
+        $this->notes->delete($noteId);
+    }
+
+    private function requireOwnNote(int $callerId, int $noteId): array
+    {
+        $note = $this->notes->findById($noteId);
+        if ($note === null) {
+            throw new NoteNotFoundException('Note not found.');
+        }
+
+        if ((int) $note['author_user_id'] !== $callerId) {
+            throw new NotAuthorizedToModifyNoteException("Only a note's own author can edit or delete it.");
+        }
+
+        return $note;
+    }
+
+    private function validateNoteInput(string $visibility, string $body): array
+    {
+        if (!in_array($visibility, ['private', 'public'], true)) {
+            throw new \InvalidArgumentException('visibility must be "private" or "public".');
+        }
+
+        $body = trim($body);
+        if ($body === '' || mb_strlen($body) > 20000) {
+            throw new \InvalidArgumentException('Note body must be 1-20,000 characters.');
+        }
+
+        return [$visibility, $body];
+    }
+
+    public function listPets(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->pets->listForHousehold($householdId);
+    }
+
+    /**
+     * createPet(...)/updatePet(...)/deletePet(...) - pets have no privacy
+     * tiers, unlike notes: every household member sees the full list, and
+     * any member may add, edit, or remove a pet (a shared household
+     * resource, not a per-user one). vet_contact_id is deliberately absent
+     * for now -- issue #16 (household contacts) hasn't shipped yet; see the
+     * migration's own comment.
+     */
+    public function createPet(
+        int $callerId,
+        int $householdId,
+        string $name,
+        ?string $species,
+        ?string $breed,
+        ?string $birthday,
+        ?string $notes
+    ): array {
+        $this->requireMember($householdId, $callerId);
+        [$name, $species, $breed, $birthday, $notes] = $this->validatePetInput($name, $species, $breed, $birthday, $notes);
+
+        return $this->pets->create($householdId, $callerId, $name, $species, $breed, $birthday, $notes);
+    }
+
+    public function updatePet(
+        int $callerId,
+        int $petId,
+        string $name,
+        ?string $species,
+        ?string $breed,
+        ?string $birthday,
+        ?string $notes
+    ): array {
+        $pet = $this->requireMemberForPet($callerId, $petId);
+        [$name, $species, $breed, $birthday, $notes] = $this->validatePetInput($name, $species, $breed, $birthday, $notes);
+        $this->pets->update((int) $pet['id'], $name, $species, $breed, $birthday, $notes);
+
+        return $this->pets->findById((int) $pet['id']);
+    }
+
+    public function deletePet(int $callerId, int $petId): void
+    {
+        $pet = $this->requireMemberForPet($callerId, $petId);
+        $this->pets->delete((int) $pet['id']);
+    }
+
+    private function requireMemberForPet(int $callerId, int $petId): array
+    {
+        $pet = $this->pets->findById($petId);
+        if ($pet === null) {
+            throw new PetNotFoundException('Pet not found.');
+        }
+
+        $this->requireMember((int) $pet['household_id'], $callerId);
+
+        return $pet;
+    }
+
+    private function validatePetInput(
+        string $name,
+        ?string $species,
+        ?string $breed,
+        ?string $birthday,
+        ?string $notes
+    ): array {
+        $name = trim($name);
+        if ($name === '' || strlen($name) > 100) {
+            throw new \InvalidArgumentException('Pet name must be 1-100 characters.');
+        }
+
+        $species = $species !== null ? trim($species) : null;
+        $species = $species === '' ? null : $species;
+
+        $breed = $breed !== null ? trim($breed) : null;
+        $breed = $breed === '' ? null : $breed;
+
+        $birthday = $birthday !== null ? trim($birthday) : null;
+        if ($birthday === '') {
+            $birthday = null;
+        }
+        if ($birthday !== null) {
+            $date = \DateTime::createFromFormat('Y-m-d', $birthday);
+            if ($date === false || $date->format('Y-m-d') !== $birthday) {
+                throw new \InvalidArgumentException('birthday must be in YYYY-MM-DD format.');
+            }
+        }
+
+        $notes = $notes !== null ? trim($notes) : null;
+        $notes = $notes === '' ? null : $notes;
+        if ($notes !== null && strlen($notes) > 2000) {
+            throw new \InvalidArgumentException('Pet notes must be 2000 characters or fewer.');
+        }
+
+        return [$name, $species, $breed, $birthday, $notes];
     }
 
     private function requireMember(int $householdId, int $userId): void

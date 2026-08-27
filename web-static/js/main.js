@@ -83,12 +83,15 @@
     async function openHouseholdDetail(householdId, householdName) {
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
+        document.getElementById('household-settings-name').value = householdName;
         document.getElementById('household-detail-section').hidden = false;
         // Hidden while a household's detail is open -- shown underneath the
         // detail panel, it was easy to mistake for part of it and got in the
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
         await loadMembers(householdId);
+        await loadNotes(householdId);
+        await loadPets(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -129,6 +132,55 @@
                     await loadHouseholds();
                 }));
             }
+            list.appendChild(li);
+        }
+    }
+
+    async function loadNotes(householdId) {
+        const { response, body } = await apiRequest('/households/notes?household_id=' + householdId);
+        const list = document.getElementById('household-notes-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const note of body.notes) {
+            const label = `${note.author_username} (${note.visibility}): ${note.body}`;
+            const { li, actions } = buildListItem(label);
+            if (Number(note.author_user_id) === user.id) {
+                actions.appendChild(buildButton('Delete', async () => {
+                    await apiRequest('/households/notes/delete', {
+                        method: 'POST',
+                        body: JSON.stringify({ note_id: note.id }),
+                    });
+                    await loadNotes(householdId);
+                }));
+            }
+            list.appendChild(li);
+        }
+    }
+
+    async function loadPets(householdId) {
+        const { response, body } = await apiRequest('/households/pets?household_id=' + householdId);
+        const list = document.getElementById('household-pets-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const pet of body.pets) {
+            const details = [pet.species, pet.breed, pet.birthday].filter(Boolean).join(', ');
+            const label = details ? `${pet.name} (${details})` : pet.name;
+            const { li, actions } = buildListItem(label);
+            actions.appendChild(buildButton('Delete', async () => {
+                await apiRequest('/households/pets/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ pet_id: pet.id }),
+                });
+                await loadPets(householdId);
+            }));
             list.appendChild(li);
         }
     }
@@ -181,6 +233,83 @@
         if (response.ok) {
             form.reset();
         }
+    });
+
+    document.getElementById('household-settings-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-settings-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/settings', {
+            method: 'POST',
+            body: JSON.stringify({ household_id: currentHouseholdId, name: form.name.value }),
+        });
+
+        if (response.ok) {
+            document.getElementById('household-detail-name').textContent = body.household.name;
+            await loadHouseholds();
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not save settings.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-note-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-note-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/notes', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                body: form.body.value,
+                visibility: form.public.checked ? 'public' : 'private',
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadNotes(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add note.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-pet-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-pet-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/pets', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                species: form.species.value,
+                breed: form.breed.value,
+                birthday: form.birthday.value,
+                notes: form.notes.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadPets(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add pet.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
     });
 
     document.getElementById('close-household-detail-button').addEventListener('click', closeHouseholdDetail);

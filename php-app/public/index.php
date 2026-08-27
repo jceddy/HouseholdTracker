@@ -22,8 +22,11 @@ use HouseholdTracker\Household\AlreadyMemberException;
 use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
+use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
+use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
+use HouseholdTracker\Household\PetNotFoundException;
 use HouseholdTracker\Household\UserNotFoundException;
 use HouseholdTracker\Ledger\Ledger;
 use HouseholdTracker\Mail\Mailer;
@@ -31,6 +34,8 @@ use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
+use HouseholdTracker\Repository\HouseholdNoteRepository;
+use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
 use HouseholdTracker\Repository\PasswordResetRepository;
 use HouseholdTracker\Repository\SessionRepository;
@@ -261,7 +266,9 @@ $households = new HouseholdService(
     new HouseholdRepository(),
     new HouseholdMemberRepository(),
     new HouseholdInviteRepository(),
-    new UserRepository()
+    new UserRepository(),
+    new HouseholdNoteRepository(),
+    new HouseholdPetRepository()
 );
 
 if ($path === '/register' && $method === 'POST') {
@@ -623,6 +630,160 @@ if ($path === '/households/members/remove' && $method === 'POST') {
     } catch (NotAHouseholdMemberException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAuthorizedToRemoveMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/settings' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $household = $households->updateSettings(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? '')
+        );
+        respond(200, ['status' => 'ok', 'household' => $household]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/notes' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'notes' => $households->listNotes((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/notes' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $note = $households->createNote(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['visibility'] ?? ''),
+            (string) ($body['body'] ?? '')
+        );
+        respond(201, ['status' => 'ok', 'note' => $note]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/notes/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $note = $households->updateNote(
+            (int) $currentUser['id'],
+            (int) ($body['note_id'] ?? 0),
+            (string) ($body['visibility'] ?? ''),
+            (string) ($body['body'] ?? '')
+        );
+        respond(200, ['status' => 'ok', 'note' => $note]);
+    } catch (NoteNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToModifyNoteException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/notes/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteNote((int) $currentUser['id'], (int) ($body['note_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (NoteNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToModifyNoteException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/pets' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'pets' => $households->listPets((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/pets' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $pet = $households->createPet(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['species']) ? (string) $body['species'] : null,
+            isset($body['breed']) ? (string) $body['breed'] : null,
+            isset($body['birthday']) ? (string) $body['birthday'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(201, ['status' => 'ok', 'pet' => $pet]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/pets/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $pet = $households->updatePet(
+            (int) $currentUser['id'],
+            (int) ($body['pet_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['species']) ? (string) $body['species'] : null,
+            isset($body['breed']) ? (string) $body['breed'] : null,
+            isset($body['birthday']) ? (string) $body['birthday'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'pet' => $pet]);
+    } catch (PetNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/pets/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deletePet((int) $currentUser['id'], (int) ($body['pet_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (PetNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }

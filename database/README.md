@@ -103,7 +103,13 @@ above remains the only way migrations reach the deployed database.
   `invited_user_id` becomes nullable and a new `invited_email` column is
   added, so an invite can target an email address with no account yet
   instead of only an already-registered user.
+- **Household settings, notes, and pets** (`0007`, issue #7):
+  `household_notes` (private/public visibility) and `household_pets`. No
+  new table for settings — v1 is just the household's own `name`, already
+  a column from `0005`. `household_pets.vet_contact_id` is deliberately
+  not included yet; see the migration's own comment and "Household
+  settings, notes, and pets" in `php-app/README.md`.
 
 Whatever household-scoped tracker tables come next (chores, finances,
 calendar, whatever the application actually ends up tracking) belong here
-too, as their own numbered migrations starting at `0006`.
+too, as their own numbered migrations starting at `0008`.
