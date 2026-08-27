@@ -268,7 +268,7 @@
             body: JSON.stringify({
                 household_id: currentHouseholdId,
                 body: form.body.value,
-                visibility: form.public.checked ? 'public' : 'private',
+                visibility: form.private.checked ? 'private' : 'public',
             }),
         });
 

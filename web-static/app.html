@@ -64,11 +64,13 @@
             <label>Note
                 <textarea id="household-note-body" name="body" required maxlength="20000"></textarea>
             </label>
-            <label>
-                <input type="checkbox" id="household-note-public" name="public">
-                Visible to the whole household (otherwise only you can see it)
-            </label>
-            <button type="submit">Add note</button>
+            <div class="form-row">
+                <button type="submit" class="button--compact">Add note</button>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="household-note-private" name="private">
+                    Private
+                </label>
+            </div>
             <p id="household-note-message" class="message" hidden></p>
         </form>
 
