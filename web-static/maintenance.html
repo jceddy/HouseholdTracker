@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+    (function () {
+        var pref = localStorage.getItem('themePreference');
+        if (pref && pref !== 'system') document.documentElement.dataset.theme = pref;
+    })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Under maintenance - HouseholdTracker</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <h1>Under maintenance</h1>
+    <p id="maintenance-message"></p>
+    <button id="retry-button" type="button">Retry now</button>
+</main>
+<footer>
+    <select id="theme-select">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+    </select>
+    <span id="app-version"></span>
+    <a class="coffee-link" href="https://www.buymeacoffee.com/jceddy" target="_blank" rel="noopener noreferrer">
+        <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee">
+    </a>
+</footer>
+<script src="/js/app.js"></script>
+<script src="/js/maintenance.js"></script>
+</body>
+</html>

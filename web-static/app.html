@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+    (function () {
+        var pref = localStorage.getItem('themePreference');
+        if (pref && pref !== 'system') document.documentElement.dataset.theme = pref;
+    })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HouseholdTracker</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <h1>HouseholdTracker</h1>
+    <p>Logged in as <strong id="current-username"></strong>.</p>
+
+    <section id="invites-section" hidden>
+        <h2>Pending invites</h2>
+        <ul id="invites-list"></ul>
+    </section>
+
+    <section id="households-section">
+        <h2>Your households</h2>
+        <ul id="households-list"></ul>
+    </section>
+
+    <section id="create-household-section">
+        <h3>Create a household</h3>
+        <form id="create-household-form">
+            <label>Name
+                <input type="text" id="household-name" name="name" required maxlength="100">
+            </label>
+            <button type="submit">Create</button>
+            <p id="create-household-message" class="message" hidden></p>
+        </form>
+    </section>
+
+    <section id="household-detail-section" hidden>
+        <h3 id="household-detail-name"></h3>
+        <ul id="household-members-list"></ul>
+        <form id="invite-form">
+            <label>Invite by username or email
+                <input type="text" id="invite-username-or-email" name="username_or_email" required>
+            </label>
+            <button type="submit">Send invite</button>
+            <p id="invite-message" class="message" hidden></p>
+        </form>
+
+        <h4>Settings</h4>
+        <form id="household-settings-form">
+            <label>Household name
+                <input type="text" id="household-settings-name" name="name" required maxlength="100">
+            </label>
+            <button type="submit">Save</button>
+            <p id="household-settings-message" class="message" hidden></p>
+        </form>
+
+        <h4>Notes</h4>
+        <ul id="household-notes-list"></ul>
+        <form id="household-note-form">
+            <label>Note
+                <textarea id="household-note-body" name="body" required maxlength="20000"></textarea>
+            </label>
+            <div class="form-row">
+                <button type="submit" class="button--compact">Add note</button>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="household-note-private" name="private">
+                    Private
+                </label>
+            </div>
+            <p id="household-note-message" class="message" hidden></p>
+        </form>
+
+        <h4>Pets</h4>
+        <ul id="household-pets-list"></ul>
+        <form id="household-pet-form">
+            <label>Name
+                <input type="text" id="household-pet-name" name="name" required maxlength="100">
+            </label>
+            <label>Species
+                <input type="text" id="household-pet-species" name="species" maxlength="100">
+            </label>
+            <label>Breed
+                <input type="text" id="household-pet-breed" name="breed" maxlength="100">
+            </label>
+            <label>Birthday
+                <input type="date" id="household-pet-birthday" name="birthday">
+            </label>
+            <label>Notes
+                <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
+            </label>
+            <button type="submit">Add pet</button>
+            <p id="household-pet-message" class="message" hidden></p>
+        </form>
+
+        <button id="close-household-detail-button" type="button">Close</button>
+    </section>
+
+    <button id="logout-button" type="button">Log out</button>
+</main>
+<footer>
+    <select id="theme-select">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+    </select>
+    <span id="app-version"></span>
+    <a class="coffee-link" href="https://www.buymeacoffee.com/jceddy" target="_blank" rel="noopener noreferrer">
+        <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee">
+    </a>
+</footer>
+<script src="/js/app.js"></script>
+<script src="/js/main.js"></script>
+</body>
+</html>
