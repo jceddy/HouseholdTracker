@@ -254,6 +254,16 @@ $auth = new AuthService(
     new PasswordResetRepository()
 );
 
+// Constructed here (rather than down in the household routes block below) so
+// /verify-email can also reach it, to link a newly-verified email's pending
+// household invites (issue #33) -- see HouseholdService::linkPendingInvitesForEmail().
+$households = new HouseholdService(
+    new HouseholdRepository(),
+    new HouseholdMemberRepository(),
+    new HouseholdInviteRepository(),
+    new UserRepository()
+);
+
 if ($path === '/register' && $method === 'POST') {
     $body = requestBody();
 
@@ -327,6 +337,7 @@ if ($path === '/verify-email' && $method === 'GET') {
 
     try {
         $user = $auth->verifyEmail($token);
+        $households->linkPendingInvitesForEmail((int) $user['id'], $user['email']);
         respondHtml(
             200,
             'Email verified - HouseholdTracker',
@@ -507,13 +518,6 @@ if ($path === '/chat' && $method === 'POST') {
 // requireAuth($auth) plus a household-membership check the same way every
 // route below already is.
 
-$households = new HouseholdService(
-    new HouseholdRepository(),
-    new HouseholdMemberRepository(),
-    new HouseholdInviteRepository(),
-    new UserRepository()
-);
-
 if ($path === '/households' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
@@ -549,11 +553,6 @@ if ($path === '/households/invite' && $method === 'POST') {
 
     try {
         $result = $households->inviteMember($householdId, (int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
-        respond(201, [
-            'status' => 'ok',
-            'message' => 'Invite sent.',
-            'invited_user' => ['id' => (int) $result['invitedUser']['id'], 'username' => $result['invitedUser']['username']],
-        ]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (UserNotFoundException $e) {
@@ -561,6 +560,38 @@ if ($path === '/households/invite' && $method === 'POST') {
     } catch (CannotInviteSelfException | AlreadyMemberException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+
+    if ($result['type'] === 'new_email') {
+        $registerUrl = SiteUrl::root() . '/register.html?email=' . urlencode($result['invitedEmail']);
+
+        try {
+            (new Mailer())->sendHouseholdInviteEmail(
+                $result['invitedEmail'],
+                $result['household']['name'],
+                $currentUser['username'],
+                $registerUrl
+            );
+        } catch (\Throwable $e) {
+            logMailError('Failed to send household invite email: ' . $e->getMessage());
+            $households->cancelInvite((int) $result['invite']['id']);
+            respond(502, [
+                'status' => 'error',
+                'message' => 'Could not send the invitation email. Please try again shortly.',
+            ]);
+        }
+
+        respond(201, [
+            'status' => 'ok',
+            'message' => "Invitation email sent to {$result['invitedEmail']}.",
+            'invited_email' => $result['invitedEmail'],
+        ]);
+    }
+
+    respond(201, [
+        'status' => 'ok',
+        'message' => 'Invite sent.',
+        'invited_user' => ['id' => (int) $result['invitedUser']['id'], 'username' => $result['invitedUser']['username']],
+    ]);
 }
 
 if ($path === '/households/invites' && $method === 'GET') {

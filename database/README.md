@@ -98,8 +98,11 @@ above remains the only way migrations reach the deployed database.
 - **Households** (`0005`, issue #5): `households`, `household_members`
   (a user's membership + role in a household — a plain join table, so a
   user isn't limited to one household), and `household_invites` (pending
-  invites to an already-registered user; see "Household invites" in
-  `php-app/README.md`).
+  invites; see "Household invites" in `php-app/README.md`).
+- **Email invites** (`0006`, issue #33): widens `household_invites` —
+  `invited_user_id` becomes nullable and a new `invited_email` column is
+  added, so an invite can target an email address with no account yet
+  instead of only an already-registered user.
 
 Whatever household-scoped tracker tables come next (chores, finances,
 calendar, whatever the application actually ends up tracking) belong here

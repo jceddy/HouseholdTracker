@@ -80,7 +80,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households`             | `{"name"}`                                        | Requires auth. Creates a household (1-100 chars) and makes the caller its `owner`. `400` on validation failure. Returns `{"household"}`. |
 | GET    | `/households`             | —                                                  | Requires auth. Every household the caller belongs to, with their own role in each: `{"households": [{"id","name","created_at","role"}]}`. |
 | GET    | `/households/members`     | query param `household_id`                        | Requires auth; `403` if the caller isn't a member of that household. Returns `{"members": [{"user_id","username","email","role","joined_at"}]}`. |
-| POST   | `/households/invite`      | `{"household_id", "username_or_email"}`            | Requires auth; `403` if the caller isn't a member. Looks up the target by username, then email — only an already-registered account can be invited (see "Household invites" below). `404` if no such account, `409` if it's already a member or already has a pending invite, `409` if inviting yourself. |
+| POST   | `/households/invite`      | `{"household_id", "username_or_email"}`            | Requires auth; `403` if the caller isn't a member. Looks up the target by username, then email; if neither matches but the input is itself a valid email address, invites that address instead — the invite doubles as a registration link (see "Household invites" below). `404` if no account matches and the input isn't a valid email either, `409` if already a member/already has a pending invite (existing-user or email invite alike), `409` if inviting yourself, `502` if the invitation email can't be sent (rolled back so you can retry). |
 | GET    | `/households/invites`     | —                                                  | Requires auth. The caller's own pending invites: `{"invites": [{"id","household_id","household_name","invited_by_user_id","invited_by_username","created_at"}]}`. |
 | POST   | `/households/invites/respond` | `{"invite_id", "action": "accept"\|"decline"}` | Requires auth. `404` if there's no such pending invite addressed to the caller. Accepting adds them as a `member`. |
 | POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else. |
@@ -118,11 +118,29 @@ by a scanner, once by the human) is harmless either way.
 
 A user may belong to any number of households — `household_members` is a
 plain join table (household + user + role), not a column on `users`, so
-nothing forces "one household per user." Inviting only targets an already-
-registered account, looked up by username then email, the same order
-`AuthService::register()`'s own duplicate checks already use; inviting an
-unregistered email address (so the invite doubles as a registration link)
-is deferred — see issue #5's own open questions.
+nothing forces "one household per user." Inviting first looks for an
+already-registered account by username then email, the same order
+`AuthService::register()`'s own duplicate checks already use.
+
+**Inviting an email with no account yet** (issue #33): if neither lookup
+matches but the input is a valid email address, `household_invites` gets a
+row with `invited_email` set and no `invited_user_id` yet, and a distinct
+invitation email goes out (`Mailer::sendHouseholdInviteEmail()`) linking to
+`register.html` (optionally prefilling the email field via `?email=...` —
+convenience only, no security-bearing token in the link). No separate
+invite-specific token is needed: `AuthService`'s existing registration flow
+already proves the recipient controls that mailbox, via `email_verifications`.
+So the moment a *new* account verifies that exact email
+(`HouseholdService::linkPendingInvitesForEmail()`, called from the
+`/verify-email` route right after `AuthService::verifyEmail()` succeeds),
+every pending `invited_email`-only invite addressed to it gets its
+`invited_user_id` set and `invited_email` cleared — becoming an ordinary
+existing-user invite with no separate acceptance path of its own; it just
+shows up through the same `GET /households/invites`/
+`POST /households/invites/respond` flow as any other invite, and isn't
+auto-accepted. A failed invitation-email send rolls the invite row back
+(`HouseholdService::cancelInvite()`), the same pattern `/register` already
+uses for a failed verification email.
 
 Any member can invite someone else or remove themselves (leave); removing
 a *different* member requires being the household's `owner` — see
