@@ -43,6 +43,30 @@ final class Mailer
         $mail->send();
     }
 
+    /**
+     * sendHouseholdInviteEmail(...) - invites someone with no account yet
+     * (issue #33): distinct wording from sendVerificationEmail() since this
+     * may be the recipient's first contact with the app at all, rather than
+     * a follow-up to something they already started.
+     *
+     * @throws \PHPMailer\PHPMailer\Exception
+     */
+    public function sendHouseholdInviteEmail(string $toEmail, string $householdName, string $inviterUsername, string $registerUrl): void
+    {
+        $mail = $this->smtpMailer();
+        $mail->addAddress($toEmail);
+
+        $mail->Subject = "You're invited to join {$householdName} on HouseholdTracker";
+        $mail->Body = "Hi,\n\n"
+            . "{$inviterUsername} has invited you to join their household, \"{$householdName}\", on HouseholdTracker.\n\n"
+            . "Create an account to get started:\n\n"
+            . "{$registerUrl}\n\n"
+            . "Once you register and verify your email, you'll see this invite waiting for you.\n\n"
+            . "If you weren't expecting this, you can ignore this email.";
+
+        $mail->send();
+    }
+
     private function smtpMailer(): PHPMailer
     {
         $mail = new PHPMailer(true);

@@ -10,13 +10,14 @@ use HouseholdTracker\Repository\HouseholdRepository;
 use HouseholdTracker\Repository\UserRepository;
 
 /**
- * Household creation, membership, and the invite flow (issue #5). A user may
- * belong to any number of households (household_members has no uniqueness
- * constraint on user_id alone). Invites only target an existing registered
- * user, looked up by username then email, mirroring AuthService::register()'s
- * own validation order -- inviting an unregistered email address (so that
- * invite doubles as a registration link) is deferred, per issue #5's own open
- * questions.
+ * Household creation, membership, and the invite flow (issues #5, #33). A
+ * user may belong to any number of households (household_members has no
+ * uniqueness constraint on user_id alone). Invites target either an existing
+ * registered user (looked up by username then email, mirroring
+ * AuthService::register()'s own validation order) or, if neither matches and
+ * the input is a valid email address, an unregistered one -- that invite
+ * doubles as a registration link (see inviteMember()/
+ * linkPendingInvitesForEmail()).
  */
 final class HouseholdService
 {
@@ -54,16 +55,38 @@ final class HouseholdService
     }
 
     /**
-     * @return array{invite: array, invitedUser: array}
+     * inviteMember(...) - invites an existing user by username or email. If
+     * neither matches any account, but the input is itself a valid email
+     * address, invites that address instead (issue #33): a pending invite
+     * with invited_email set and no invited_user_id yet, which
+     * linkPendingInvitesForEmail() converts to an ordinary existing-user
+     * invite the moment that email is verified during registration -- no
+     * separate acceptance path, it just becomes a normal pending invite at
+     * that point.
+     *
+     * @return array{type: 'existing_user', invite: array, invitedUser: array, household: array}
+     *     |array{type: 'new_email', invite: array, invitedEmail: string, household: array}
      */
     public function inviteMember(int $householdId, int $inviterUserId, string $usernameOrEmail): array
     {
         $this->requireMember($householdId, $inviterUserId);
+        $household = $this->households->findById($householdId);
 
         $usernameOrEmail = trim($usernameOrEmail);
         $target = $this->users->findByUsername($usernameOrEmail) ?? $this->users->findByEmail($usernameOrEmail);
+
         if ($target === null) {
-            throw new UserNotFoundException("No account found for \"{$usernameOrEmail}\".");
+            if (filter_var($usernameOrEmail, FILTER_VALIDATE_EMAIL) === false) {
+                throw new UserNotFoundException("No account found for \"{$usernameOrEmail}\".");
+            }
+
+            if ($this->invites->findPendingForEmail($householdId, $usernameOrEmail) !== null) {
+                throw new AlreadyMemberException("{$usernameOrEmail} already has a pending invite to this household.");
+            }
+
+            $invite = $this->invites->createForEmail($householdId, $usernameOrEmail, $inviterUserId);
+
+            return ['type' => 'new_email', 'invite' => $invite, 'invitedEmail' => $usernameOrEmail, 'household' => $household];
         }
 
         $targetUserId = (int) $target['id'];
@@ -75,13 +98,40 @@ final class HouseholdService
             throw new AlreadyMemberException("{$target['username']} is already a member of this household.");
         }
 
-        if ($this->invites->findPending($householdId, $targetUserId) !== null) {
+        if ($this->invites->findPendingForUser($householdId, $targetUserId) !== null) {
             throw new AlreadyMemberException("{$target['username']} already has a pending invite to this household.");
         }
 
-        $invite = $this->invites->create($householdId, $targetUserId, $inviterUserId);
+        $invite = $this->invites->createForUser($householdId, $targetUserId, $inviterUserId);
 
-        return ['invite' => $invite, 'invitedUser' => $target];
+        return ['type' => 'existing_user', 'invite' => $invite, 'invitedUser' => $target, 'household' => $household];
+    }
+
+    /**
+     * cancelInvite(...) - rolls back an email invite whose invitation email
+     * failed to send, mirroring AuthService::cancelRegistration()'s own
+     * rollback-on-failed-email pattern.
+     */
+    public function cancelInvite(int $inviteId): void
+    {
+        $this->invites->delete($inviteId);
+    }
+
+    /**
+     * linkPendingInvitesForEmail(...) - called once a NEW account's email is
+     * verified (see the /verify-email route, right after
+     * AuthService::verifyEmail() succeeds): converts every pending
+     * email-only invite addressed to it into an ordinary existing-user
+     * invite, so it shows up through the normal
+     * listInvitesForUser()/respondToInvite() flow like any other invite.
+     * Deliberately does not auto-join the household -- the person still has
+     * to accept it, the same as an invite to an already-registered user.
+     */
+    public function linkPendingInvitesForEmail(int $userId, string $email): void
+    {
+        foreach ($this->invites->findAllPendingForEmail($email) as $invite) {
+            $this->invites->linkToUser((int) $invite['id'], $userId);
+        }
     }
 
     public function listInvitesForUser(int $userId): array

@@ -6,6 +6,14 @@
     const form = document.getElementById('register-form');
     const messageEl = document.getElementById('register-message');
 
+    // Prefills from a household invite email's own registration link
+    // (?email=...) -- convenience only, no security-bearing token involved;
+    // see "Invite an unregistered email address" in php-app/README.md.
+    const prefillEmail = new URLSearchParams(window.location.search).get('email');
+    if (prefillEmail) {
+        form.email.value = prefillEmail;
+    }
+
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
         messageEl.hidden = true;
