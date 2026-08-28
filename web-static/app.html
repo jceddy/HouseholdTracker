@@ -96,6 +96,42 @@
             <p id="household-pet-message" class="message" hidden></p>
         </form>
 
+        <h4>Tasks</h4>
+        <ul id="household-tasks-list"></ul>
+        <form id="household-task-form">
+            <label>Title
+                <input type="text" id="household-task-title" name="title" required maxlength="150">
+            </label>
+            <label>Description
+                <textarea id="household-task-description" name="description" maxlength="2000"></textarea>
+            </label>
+            <label>Assign to
+                <select id="household-task-assignee" name="assigned_to_user_id">
+                    <option value="">Unassigned</option>
+                </select>
+            </label>
+            <label>Repeats
+                <select id="household-task-frequency" name="recurrence_frequency">
+                    <option value="">One-off (no repeat)</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="annual">Annual</option>
+                </select>
+            </label>
+            <label id="household-task-interval-row" hidden>Every
+                <span class="inline-number-unit">
+                    <input type="number" id="household-task-interval" name="recurrence_interval" min="1" max="1000" value="1">
+                    <span id="household-task-interval-unit">day(s)</span>
+                </span>
+            </label>
+            <label>Due date
+                <input type="date" id="household-task-due-at" name="due_at">
+            </label>
+            <button type="submit">Add task</button>
+            <p id="household-task-message" class="message" hidden></p>
+        </form>
+
         <button id="close-household-detail-button" type="button">Close</button>
     </section>
 

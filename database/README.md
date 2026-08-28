@@ -109,7 +109,14 @@ above remains the only way migrations reach the deployed database.
   a column from `0005`. `household_pets.vet_contact_id` is deliberately
   not included yet; see the migration's own comment and "Household
   settings, notes, and pets" in `php-app/README.md`.
+- **Task/chore tracking** (`0008`, issue #12): `household_tasks`
+  (one-off and recurring, assignable to a member) and
+  `household_task_completions` (append-only history). `source_type`/
+  `source_id` are reserved, unenforced columns for a future tracker (e.g.
+  issues #8/#11) to link its own tasks into this same system instead of
+  growing a bespoke table — see "Task/chore tracking" in
+  `php-app/README.md`.
 
-Whatever household-scoped tracker tables come next (chores, finances,
-calendar, whatever the application actually ends up tracking) belong here
-too, as their own numbered migrations starting at `0008`.
+Whatever household-scoped tracker tables come next (finances, calendar,
+whatever the application actually ends up tracking) belong here too, as
+their own numbered migrations starting at `0009`.

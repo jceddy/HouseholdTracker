@@ -27,6 +27,8 @@ use HouseholdTracker\Household\NotAHouseholdMemberException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
 use HouseholdTracker\Household\PetNotFoundException;
+use HouseholdTracker\Household\TaskNotFoundException;
+use HouseholdTracker\Household\TaskService;
 use HouseholdTracker\Household\UserNotFoundException;
 use HouseholdTracker\Ledger\Ledger;
 use HouseholdTracker\Mail\Mailer;
@@ -37,6 +39,8 @@ use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
+use HouseholdTracker\Repository\HouseholdTaskCompletionRepository;
+use HouseholdTracker\Repository\HouseholdTaskRepository;
 use HouseholdTracker\Repository\PasswordResetRepository;
 use HouseholdTracker\Repository\SessionRepository;
 use HouseholdTracker\Repository\UserRepository;
@@ -269,6 +273,12 @@ $households = new HouseholdService(
     new UserRepository(),
     new HouseholdNoteRepository(),
     new HouseholdPetRepository()
+);
+
+$tasks = new TaskService(
+    new HouseholdMemberRepository(),
+    new HouseholdTaskRepository(),
+    new HouseholdTaskCompletionRepository()
 );
 
 if ($path === '/register' && $method === 'POST') {
@@ -788,7 +798,101 @@ if ($path === '/households/pets/delete' && $method === 'POST') {
     }
 }
 
-// Further household-tracking domain routes (chores, finances, calendar,
-// whatever this app actually ends up tracking) go here.
+if ($path === '/households/tasks' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'tasks' => $tasks->listTasks((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/tasks' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $task = $tasks->createTask(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            isset($body['assigned_to_user_id']) && $body['assigned_to_user_id'] !== '' ? (int) $body['assigned_to_user_id'] : null,
+            isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
+            isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
+            isset($body['due_at']) ? (string) $body['due_at'] : null
+        );
+        respond(201, ['status' => 'ok', 'task' => $task]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/tasks/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $task = $tasks->updateTask(
+            (int) $currentUser['id'],
+            (int) ($body['task_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            isset($body['assigned_to_user_id']) && $body['assigned_to_user_id'] !== '' ? (int) $body['assigned_to_user_id'] : null,
+            (string) ($body['status'] ?? 'open'),
+            isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
+            isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
+            isset($body['due_at']) ? (string) $body['due_at'] : null
+        );
+        respond(200, ['status' => 'ok', 'task' => $task]);
+    } catch (TaskNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/tasks/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tasks->deleteTask((int) $currentUser['id'], (int) ($body['task_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (TaskNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/tasks/complete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $task = $tasks->completeTask(
+            (int) $currentUser['id'],
+            (int) ($body['task_id'] ?? 0),
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'task' => $task]);
+    } catch (TaskNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Further household-tracking domain routes (finances, calendar, whatever
+// this app actually ends up tracking) go here.
 
 respond(404, ['status' => 'error', 'message' => 'Not found']);
