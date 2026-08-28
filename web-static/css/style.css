@@ -156,6 +156,39 @@ form {
     margin-top: 1rem;
 }
 
+.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 1.25rem;
+}
+
+button.tab-button {
+    background: none;
+    color: var(--color-muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: 0.4rem 0.4rem 0 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+
+button.tab-button:hover {
+    color: var(--color-text);
+    background: var(--color-surface);
+}
+
+button.tab-button[aria-selected="true"] {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+.tab-panel {
+    margin-bottom: 2rem;
+}
+
 label {
     font-size: 0.85rem;
     color: var(--color-muted);

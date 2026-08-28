@@ -111,6 +111,23 @@
         }
     }
 
+    // activateTab(...) - the household detail view's Members/Settings/Notes/
+    // Pets/Tasks sections are tab panels rather than stacked vertically;
+    // this shows the chosen one and hides the rest, keyed off each tab
+    // button's own data-tab attribute matching a "tab-panel-<name>" panel id.
+    function activateTab(tabName) {
+        for (const button of document.querySelectorAll('.tab-button')) {
+            button.setAttribute('aria-selected', String(button.dataset.tab === tabName));
+        }
+        for (const panel of document.querySelectorAll('.tab-panel')) {
+            panel.hidden = panel.id !== `tab-panel-${tabName}`;
+        }
+    }
+
+    for (const button of document.querySelectorAll('.tab-button')) {
+        button.addEventListener('click', () => activateTab(button.dataset.tab));
+    }
+
     async function openHouseholdDetail(householdId, householdName) {
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
@@ -120,6 +137,7 @@
         // detail panel, it was easy to mistake for part of it and got in the
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
+        activateTab('members');
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
