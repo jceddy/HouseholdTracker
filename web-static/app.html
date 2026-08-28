@@ -17,6 +17,12 @@
     <h1>HouseholdTracker</h1>
     <p>Logged in as <strong id="current-username"></strong>.</p>
 
+    <div class="tabs" role="tablist">
+        <button type="button" class="top-tab-button" data-top-tab="households" role="tab" aria-selected="true">Households</button>
+        <button type="button" class="top-tab-button" data-top-tab="my-tasks" role="tab" aria-selected="false">My Tasks</button>
+    </div>
+
+    <div class="top-tab-panel" id="top-tab-panel-households" role="tabpanel">
     <section id="invites-section" hidden>
         <h2>Pending invites</h2>
         <ul id="invites-list"></ul>
@@ -149,6 +155,11 @@
 
         <button id="close-household-detail-button" type="button">Close</button>
     </section>
+    </div>
+
+    <div class="top-tab-panel" id="top-tab-panel-my-tasks" role="tabpanel" hidden>
+        <ul id="my-tasks-list"></ul>
+    </div>
 
     <button id="logout-button" type="button">Log out</button>
 </main>

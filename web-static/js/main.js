@@ -128,6 +128,24 @@
         button.addEventListener('click', () => activateTab(button.dataset.tab));
     }
 
+    // activateTopTab(...) - same idea as activateTab(), one level up: the
+    // landing page's Households/My Tasks sections are top-level tab panels.
+    // Kept as a separate function/class pair (top-tab-button/top-tab-panel)
+    // rather than sharing activateTab()'s selectors, so switching one tab
+    // group never touches the other's aria-selected/hidden state.
+    function activateTopTab(tabName) {
+        for (const button of document.querySelectorAll('.top-tab-button')) {
+            button.setAttribute('aria-selected', String(button.dataset.topTab === tabName));
+        }
+        for (const panel of document.querySelectorAll('.top-tab-panel')) {
+            panel.hidden = panel.id !== `top-tab-panel-${tabName}`;
+        }
+    }
+
+    for (const button of document.querySelectorAll('.top-tab-button')) {
+        button.addEventListener('click', () => activateTopTab(button.dataset.topTab));
+    }
+
     async function openHouseholdDetail(householdId, householdName) {
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
@@ -481,6 +499,54 @@
         }
     }
 
+    // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
+    // household "My Tasks" view: leads with which household the task
+    // belongs to instead of who it's assigned to (that's always "me" here,
+    // so redundant), and skips the 'done' bit since GET /tasks/mine only
+    // ever returns not-yet-done tasks.
+    function formatMyTaskLabel(task) {
+        const bits = [`${task.household_name}: ${task.title}`];
+        if (task.recurrence_frequency) {
+            bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
+        }
+        if (task.next_due_at) {
+            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.next_due_at})` : `due ${task.next_due_at}`);
+        }
+        if (Number(task.completion_count) > 0) {
+            bits.push(`completed ${task.completion_count}x`);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadMyTasks() {
+        const { response, body } = await apiRequest('/tasks/mine');
+        const list = document.getElementById('my-tasks-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing assigned to you right now.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of body.tasks) {
+            const { li, actions } = buildListItem(formatMyTaskLabel(task));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ task_id: task.id }),
+                });
+                await loadMyTasks();
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // renderTaskEditForm(...) - same inline-edit pattern as
     // renderNoteEditForm()/renderPetEditForm(); any household member may
     // edit any task (a shared resource, like pets). Status isn't editable
@@ -779,4 +845,5 @@
 
     await loadInvites();
     await loadHouseholds();
+    await loadMyTasks();
 })();

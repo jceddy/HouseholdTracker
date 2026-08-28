@@ -40,6 +40,18 @@ final class TaskService
         return $this->tasks->listForHousehold($householdId);
     }
 
+    /**
+     * listMyTasks(...) - the "My Tasks" view: every not-yet-done task
+     * assigned to this user across every household they belong to, not
+     * scoped to one household. No membership check needed here beyond what
+     * HouseholdTaskRepository::listAssignedToUser() already enforces via its
+     * own join.
+     */
+    public function listMyTasks(int $userId): array
+    {
+        return $this->tasks->listAssignedToUser($userId);
+    }
+
     public function createTask(
         int $callerId,
         int $householdId,

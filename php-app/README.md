@@ -99,11 +99,12 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/tasks/update` | `{"task_id", "title", "description"?, "assigned_to_user_id"?, "status": "open"\|"in_progress", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such task; `403` if the caller isn't a member of that task's household. `400` if `status` is `"done"` — that's only reachable via `/households/tasks/complete`. Any member may update any task. |
 | POST   | `/households/tasks/delete` | `{"task_id"}`                                    | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. |
 | POST   | `/households/tasks/complete` | `{"task_id", "notes"?}`                        | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. Logs a completion (`notes`: ≤2000 chars) and, for a recurring task, advances `next_due_at` by one interval — see "Task/chore tracking" below. |
+| GET    | `/tasks/mine`             | —                                                  | Requires auth. Every not-yet-`done` task assigned to the caller across *every* household they belong to (the "My Tasks" view), not scoped to one household — same response shape as `/households/tasks` (plus `household_name`, no `assigned_to_username` since it's always the caller). Completing one of these still goes through `/households/tasks/complete` above. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
 Whatever household-scoped tracker routes come next belong below
-`/households/tasks/complete` in `public/index.php`, each guarded by the
+`/tasks/mine` in `public/index.php`, each guarded by the
 same `requireAuth($auth)` call plus a household-membership check the way
 `/households/members` already is.
 
@@ -225,6 +226,16 @@ months — see the class's own docblock.
 A task's `status` only ever reaches `done` through `/households/tasks/complete`
 — `/households/tasks/update` rejects it outright, so a completed task can
 never exist without a matching completion row.
+
+**"My Tasks" (`GET /tasks/mine`)**: a cross-household view — every
+not-yet-`done` task assigned to the caller, across every household they
+belong to, ordered by due date the same way as a single household's list.
+`HouseholdTaskRepository::listAssignedToUser()`'s query joins back to
+`household_members` (matching both the household and the assignee) so a
+task doesn't keep showing up here after its assignee has since left that
+household — removing a member doesn't clear `assigned_to_user_id` on their
+existing tasks, so without that join a stale assignment would otherwise
+linger forever.
 
 **Not yet wired up**: `source_type`/`source_id` are reserved, unenforced
 columns for a future meeting (issue #8) or home-improvement project (issue
