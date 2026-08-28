@@ -39,7 +39,7 @@ use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
-use HouseholdTracker\Repository\HouseholdTaskCompletionRepository;
+use HouseholdTracker\Repository\HouseholdTaskInstanceRepository;
 use HouseholdTracker\Repository\HouseholdTaskRepository;
 use HouseholdTracker\Repository\PasswordResetRepository;
 use HouseholdTracker\Repository\SessionRepository;
@@ -278,7 +278,7 @@ $households = new HouseholdService(
 $tasks = new TaskService(
     new HouseholdMemberRepository(),
     new HouseholdTaskRepository(),
-    new HouseholdTaskCompletionRepository()
+    new HouseholdTaskInstanceRepository()
 );
 
 if ($path === '/register' && $method === 'POST') {
@@ -839,11 +839,10 @@ if ($path === '/households/tasks/update' && $method === 'POST') {
     try {
         $task = $tasks->updateTask(
             (int) $currentUser['id'],
-            (int) ($body['task_id'] ?? 0),
+            (int) ($body['instance_id'] ?? 0),
             (string) ($body['title'] ?? ''),
             isset($body['description']) ? (string) $body['description'] : null,
             isset($body['assigned_to_user_id']) && $body['assigned_to_user_id'] !== '' ? (int) $body['assigned_to_user_id'] : null,
-            (string) ($body['status'] ?? 'open'),
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) ? (string) $body['due_at'] : null
@@ -863,7 +862,7 @@ if ($path === '/households/tasks/delete' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $tasks->deleteTask((int) $currentUser['id'], (int) ($body['task_id'] ?? 0));
+        $tasks->deleteInstance((int) $currentUser['id'], (int) ($body['instance_id'] ?? 0));
         respond(200, ['status' => 'ok']);
     } catch (TaskNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -877,9 +876,9 @@ if ($path === '/households/tasks/complete' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $task = $tasks->completeTask(
+        $task = $tasks->completeInstance(
             (int) $currentUser['id'],
-            (int) ($body['task_id'] ?? 0),
+            (int) ($body['instance_id'] ?? 0),
             isset($body['notes']) ? (string) $body['notes'] : null
         );
         respond(200, ['status' => 'ok', 'task' => $task]);

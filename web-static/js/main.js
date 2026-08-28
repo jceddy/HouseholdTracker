@@ -443,8 +443,11 @@
 
     const todayIso = new Date().toISOString().slice(0, 10);
 
+    // isTaskOverdue(...) - the list only ever contains *pending* instances
+    // (see loadTasks()/loadMyTasks()'s own routes), so there's no status
+    // check needed here anymore -- just whether its due date has passed.
     function isTaskOverdue(task) {
-        return task.status !== 'done' && !!task.next_due_at && task.next_due_at < todayIso;
+        return !!task.due_at && task.due_at < todayIso;
     }
 
     function formatTaskLabel(task) {
@@ -455,11 +458,8 @@
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
         }
-        if (task.next_due_at) {
-            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.next_due_at})` : `due ${task.next_due_at}`);
-        }
-        if (task.status === 'done') {
-            bits.push('done');
+        if (task.due_at) {
+            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -478,20 +478,18 @@
 
         for (const task of body.tasks) {
             const { li, actions } = buildListItem(formatTaskLabel(task));
-            if (task.status !== 'done') {
-                actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                    await apiRequest('/households/tasks/complete', {
-                        method: 'POST',
-                        body: JSON.stringify({ task_id: task.id }),
-                    });
-                    await loadTasks(householdId);
-                }));
-            }
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadTasks(householdId);
+            }));
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
                     method: 'POST',
-                    body: JSON.stringify({ task_id: task.id }),
+                    body: JSON.stringify({ instance_id: task.id }),
                 });
                 await loadTasks(householdId);
             }));
@@ -502,15 +500,14 @@
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to instead of who it's assigned to (that's always "me" here,
-    // so redundant), and skips the 'done' bit since GET /tasks/mine only
-    // ever returns not-yet-done tasks.
+    // so redundant).
     function formatMyTaskLabel(task) {
         const bits = [`${task.household_name}: ${task.title}`];
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
         }
-        if (task.next_due_at) {
-            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.next_due_at})` : `due ${task.next_due_at}`);
+        if (task.due_at) {
+            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -539,7 +536,7 @@
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
-                    body: JSON.stringify({ task_id: task.id }),
+                    body: JSON.stringify({ instance_id: task.id }),
                 });
                 await loadMyTasks();
             }));
@@ -549,10 +546,11 @@
 
     // renderTaskEditForm(...) - same inline-edit pattern as
     // renderNoteEditForm()/renderPetEditForm(); any household member may
-    // edit any task (a shared resource, like pets). Status isn't editable
-    // here -- 'done' is only ever reached via the Complete button, and
-    // there's no UI for the separate 'in_progress' state yet, so saving
-    // always resubmits 'open' (see TaskService::updateTask()).
+    // edit any task (a shared resource, like pets). Editing updates both
+    // the underlying recurring/one-off definition (title/description/
+    // assignee/recurrence) and this specific instance's own due date --
+    // see TaskService::updateTask()'s own docblock for why moving the due
+    // date only affects the instance being edited, not the whole series.
     function renderTaskEditForm(li, task, householdId) {
         li.innerHTML = '';
 
@@ -619,7 +617,7 @@
         dueAtLabel.textContent = 'Due date';
         const dueAtInput = document.createElement('input');
         dueAtInput.type = 'date';
-        dueAtInput.value = task.next_due_at || '';
+        dueAtInput.value = task.due_at || '';
         dueAtLabel.appendChild(dueAtInput);
         form.appendChild(dueAtLabel);
 
@@ -653,11 +651,10 @@
             const { response, body } = await apiRequest('/households/tasks/update', {
                 method: 'POST',
                 body: JSON.stringify({
-                    task_id: task.id,
+                    instance_id: task.id,
                     title: titleInput.value,
                     description: descriptionTextarea.value,
                     assigned_to_user_id: assigneeSelect.value,
-                    status: 'open',
                     recurrence_frequency: frequencySelect.value,
                     recurrence_interval: frequencySelect.value ? intervalInput.value : '',
                     due_at: dueAtInput.value,

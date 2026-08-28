@@ -144,6 +144,11 @@ is considered complete.
    details. Every *later* migration, once the app is deployed and
    `MIGRATION_DEPLOY_KEY` is set, applies itself automatically on the
    deploy that introduces it.
+6. In cPanel's **Cron Jobs** page, add a daily entry running
+   `bin/generate_task_instances.php` — see "Cron setup" in
+   `php-app/README.md`'s "Task/chore tracking" section for the exact
+   command and why this can't be part of the deploy workflow itself
+   (cPanel cron entries aren't something a GitHub Actions run can create).
 
 Once secrets are set and `main` has the schema-backed database ready, a
 push to `main` deploys automatically, applying any pending migration along

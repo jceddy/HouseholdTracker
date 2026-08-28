@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace HouseholdTracker\Household;
 
 use HouseholdTracker\Repository\HouseholdMemberRepository;
-use HouseholdTracker\Repository\HouseholdTaskCompletionRepository;
+use HouseholdTracker\Repository\HouseholdTaskInstanceRepository;
 use HouseholdTracker\Repository\HouseholdTaskRepository;
 
 /**
@@ -15,10 +15,15 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * content -- like pets (issue #7), any member may create/edit/delete/
  * complete any task, not just its creator or assignee.
  *
- * A task's status only ever reaches 'done' through completeTask() (which
- * also logs completion history) -- updateTask() deliberately rejects 'done'
- * so a completed task is never left without a matching
- * household_task_completions row.
+ * Reworked into a definition (HouseholdTaskRepository)+instances
+ * (HouseholdTaskInstanceRepository) split by a follow-up to #12 -- see
+ * database/migrations/0009_add_household_task_instances.sql and
+ * "Task/chore tracking" in php-app/README.md for why. Every method here
+ * that used to take a task_id now takes an instance_id instead (an
+ * instance's own id), except createTask() (there's nothing to identify yet)
+ * and, implicitly, updateTask() -- which edits both the instance being
+ * looked at *and* its parent definition in one call, since from the UI's
+ * side there's just one "task" being edited, not two separate objects.
  */
 final class TaskService
 {
@@ -29,7 +34,7 @@ final class TaskService
     public function __construct(
         private readonly HouseholdMemberRepository $members,
         private readonly HouseholdTaskRepository $tasks,
-        private readonly HouseholdTaskCompletionRepository $completions,
+        private readonly HouseholdTaskInstanceRepository $instances,
     ) {
     }
 
@@ -37,19 +42,19 @@ final class TaskService
     {
         $this->requireMember($householdId, $callerId);
 
-        return $this->tasks->listForHousehold($householdId);
+        return $this->instances->listForHousehold($householdId);
     }
 
     /**
-     * listMyTasks(...) - the "My Tasks" view: every not-yet-done task
+     * listMyTasks(...) - the "My Tasks" view: every pending instance
      * assigned to this user across every household they belong to, not
      * scoped to one household. No membership check needed here beyond what
-     * HouseholdTaskRepository::listAssignedToUser() already enforces via its
-     * own join.
+     * HouseholdTaskInstanceRepository::listAssignedToUser() already
+     * enforces via its own join.
      */
     public function listMyTasks(int $userId): array
     {
-        return $this->tasks->listAssignedToUser($userId);
+        return $this->instances->listAssignedToUser($userId);
     }
 
     public function createTask(
@@ -65,69 +70,71 @@ final class TaskService
         $this->requireMember($householdId, $callerId);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
         $this->requireMemberIfAssigned($householdId, $assignedToUserId);
-        [$recurrenceFrequency, $recurrenceInterval, $dueAt] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval, $dueAt);
+        [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
+        $dueAt = $this->validateDueAt($dueAt);
 
-        return $this->tasks->create(
-            $householdId,
-            $callerId,
-            $title,
-            $description,
-            $assignedToUserId,
-            $recurrenceFrequency,
-            $recurrenceInterval,
-            $dueAt
-        );
+        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignedToUserId, $recurrenceFrequency, $recurrenceInterval, $dueAt);
+        $instance = $this->instances->create((int) $task['id'], $dueAt);
+
+        return $this->instances->findByIdWithTaskInfo((int) $instance['id']);
     }
 
+    /**
+     * updateTask(...) - edits the parent definition's title/description/
+     * assignee/recurrence, *and* moves this specific instance's own due
+     * date. Doesn't touch the definition's start_date (see
+     * HouseholdTaskRepository::update()'s own docblock) or any other
+     * instance -- a recurring task's already-generated future occurrences
+     * keep whatever dates cron gave them.
+     */
     public function updateTask(
         int $callerId,
-        int $taskId,
+        int $instanceId,
         string $title,
         ?string $description,
         ?int $assignedToUserId,
-        string $status,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         ?string $dueAt
     ): array {
-        $task = $this->requireMemberForTask($callerId, $taskId);
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
+        $task = $this->tasks->findById((int) $instance['task_id']);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
         $this->requireMemberIfAssigned((int) $task['household_id'], $assignedToUserId);
-        [$recurrenceFrequency, $recurrenceInterval, $dueAt] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval, $dueAt);
+        [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
+        $dueAt = $this->validateDueAt($dueAt);
 
-        if (!in_array($status, ['open', 'in_progress'], true)) {
-            throw new \InvalidArgumentException('status must be "open" or "in_progress" -- use complete to mark a task done.');
-        }
+        $this->tasks->update((int) $task['id'], $title, $description, $assignedToUserId, $recurrenceFrequency, $recurrenceInterval);
+        $this->instances->updateDueAt($instanceId, $dueAt);
 
-        $taskId = (int) $task['id'];
-        $this->tasks->update($taskId, $title, $description, $assignedToUserId, $status, $recurrenceFrequency, $recurrenceInterval, $dueAt);
-
-        return $this->tasks->findById($taskId);
-    }
-
-    public function deleteTask(int $callerId, int $taskId): void
-    {
-        $task = $this->requireMemberForTask($callerId, $taskId);
-        $this->tasks->delete((int) $task['id']);
+        return $this->instances->findByIdWithTaskInfo($instanceId);
     }
 
     /**
-     * completeTask(...) - logs completion history and, for a recurring
-     * chore, advances next_due_at by exactly one interval from its
-     * *previous scheduled* due date (RecurrenceCalculator::advance()) --
-     * never from whenever it actually got done, so the schedule stays
-     * anchored (e.g. trash day stays Monday) instead of drifting later and
-     * later after an occasional late completion. This was an explicit open
-     * question in issue #12; resolved this way rather than rescheduling
-     * from the completion date. A one-off task is simply marked 'done'.
-     * See RecurrenceCalculator's own docblock for a related, deliberate
-     * consequence: a month-end monthly/annual task that clamps down (e.g.
-     * Jan 31 -> Feb 28) does not spring back to its original day-of-month
-     * once a longer month comes around.
+     * deleteInstance(...) - a one-off task has exactly one instance ever,
+     * so deleting it deletes the whole definition (which cascades back to
+     * the instance itself) rather than leaving an orphaned definition
+     * behind. A recurring task's instance is just one occurrence among
+     * others (existing and future), so only that row goes -- "skip this
+     * occurrence" -- leaving the definition and its other instances alone.
      */
-    public function completeTask(int $callerId, int $taskId, ?string $notes): array
+    public function deleteInstance(int $callerId, int $instanceId): void
     {
-        $task = $this->requireMemberForTask($callerId, $taskId);
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
+        $task = $this->tasks->findById((int) $instance['task_id']);
+
+        if ($task['recurrence_frequency'] === null) {
+            $this->tasks->delete((int) $task['id']);
+
+            return;
+        }
+
+        $this->instances->delete($instanceId);
+    }
+
+    public function completeInstance(int $callerId, int $instanceId, ?string $notes): array
+    {
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
 
         $notes = $notes !== null ? trim($notes) : null;
         $notes = $notes === '' ? null : $notes;
@@ -135,47 +142,22 @@ final class TaskService
             throw new \InvalidArgumentException('Completion notes must be ' . self::MAX_NOTES_LENGTH . ' characters or fewer.');
         }
 
-        $taskId = (int) $task['id'];
-        $this->completions->create($taskId, $callerId, $notes);
+        $this->instances->markDone($instanceId, $callerId, $notes);
 
-        $assignedToUserId = $task['assigned_to_user_id'] !== null ? (int) $task['assigned_to_user_id'] : null;
-
-        if ($task['recurrence_frequency'] === null) {
-            $this->tasks->update($taskId, (string) $task['title'], $task['description'], $assignedToUserId, 'done', null, null, $task['next_due_at']);
-
-            return $this->tasks->findById($taskId);
-        }
-
-        $nextDueAt = RecurrenceCalculator::advance(
-            new \DateTimeImmutable((string) $task['next_due_at']),
-            (string) $task['recurrence_frequency'],
-            (int) $task['recurrence_interval']
-        );
-
-        $this->tasks->update(
-            $taskId,
-            (string) $task['title'],
-            $task['description'],
-            $assignedToUserId,
-            'open',
-            (string) $task['recurrence_frequency'],
-            (int) $task['recurrence_interval'],
-            $nextDueAt->format('Y-m-d')
-        );
-
-        return $this->tasks->findById($taskId);
+        return $this->instances->findByIdWithTaskInfo($instanceId);
     }
 
-    private function requireMemberForTask(int $callerId, int $taskId): array
+    private function requireMemberForInstance(int $callerId, int $instanceId): array
     {
-        $task = $this->tasks->findById($taskId);
-        if ($task === null) {
+        $instance = $this->instances->findById($instanceId);
+        if ($instance === null) {
             throw new TaskNotFoundException('Task not found.');
         }
 
+        $task = $this->tasks->findById((int) $instance['task_id']);
         $this->requireMember((int) $task['household_id'], $callerId);
 
-        return $task;
+        return $instance;
     }
 
     private function requireMemberIfAssigned(int $householdId, ?int $assignedToUserId): void
@@ -202,23 +184,34 @@ final class TaskService
     }
 
     /**
-     * validateRecurrence(...) - recurrence_frequency and recurrence_interval
-     * travel together (both null for a one-off task, both set for a
-     * recurring one); due_at is required for a recurring task (it's the
-     * anchor RecurrenceCalculator advances from) but optional for a one-off
-     * task (a plain deadline, or no deadline at all).
+     * validateDueAt(...) - defaults to today when omitted, for a one-off
+     * task or a recurring one alike (a recurring task's due_at here is
+     * still just the *anchor* -- its literal due date is required now that
+     * every task, recurring or not, always has at least one concrete
+     * instance).
      */
-    private function validateRecurrence(?string $recurrenceFrequency, ?int $recurrenceInterval, ?string $dueAt): array
+    private function validateDueAt(?string $dueAt): string
     {
-        $dueAt = $dueAt !== null ? trim($dueAt) : null;
-        $dueAt = $dueAt === '' ? null : $dueAt;
-        if ($dueAt !== null) {
-            $date = \DateTime::createFromFormat('Y-m-d', $dueAt);
-            if ($date === false || $date->format('Y-m-d') !== $dueAt) {
-                throw new \InvalidArgumentException('due_at must be in YYYY-MM-DD format.');
-            }
+        $dueAt = $dueAt !== null ? trim($dueAt) : '';
+        if ($dueAt === '') {
+            return (new \DateTimeImmutable('today'))->format('Y-m-d');
         }
 
+        $date = \DateTime::createFromFormat('Y-m-d', $dueAt);
+        if ($date === false || $date->format('Y-m-d') !== $dueAt) {
+            throw new \InvalidArgumentException('due_at must be in YYYY-MM-DD format.');
+        }
+
+        return $dueAt;
+    }
+
+    /**
+     * validateRecurrence(...) - recurrence_frequency and recurrence_interval
+     * travel together: both null for a one-off task, both set for a
+     * recurring one.
+     */
+    private function validateRecurrence(?string $recurrenceFrequency, ?int $recurrenceInterval): array
+    {
         $recurrenceFrequency = $recurrenceFrequency !== null && $recurrenceFrequency !== '' ? $recurrenceFrequency : null;
 
         if ($recurrenceFrequency === null) {
@@ -226,7 +219,7 @@ final class TaskService
                 throw new \InvalidArgumentException('recurrence_interval requires a recurrence_frequency.');
             }
 
-            return [null, null, $dueAt];
+            return [null, null];
         }
 
         if (!in_array($recurrenceFrequency, self::RECURRENCE_FREQUENCIES, true)) {
@@ -238,11 +231,7 @@ final class TaskService
             throw new \InvalidArgumentException('recurrence_interval must be between 1 and ' . self::MAX_RECURRENCE_INTERVAL . '.');
         }
 
-        if ($dueAt === null) {
-            throw new \InvalidArgumentException('A recurring task needs a due_at to anchor its schedule.');
-        }
-
-        return [$recurrenceFrequency, $recurrenceInterval, $dueAt];
+        return [$recurrenceFrequency, $recurrenceInterval];
     }
 
     private function requireMember(int $householdId, int $userId): void

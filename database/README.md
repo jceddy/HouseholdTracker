@@ -114,9 +114,20 @@ above remains the only way migrations reach the deployed database.
   `household_task_completions` (append-only history). `source_type`/
   `source_id` are reserved, unenforced columns for a future tracker (e.g.
   issues #8/#11) to link its own tasks into this same system instead of
-  growing a bespoke table — see "Task/chore tracking" in
-  `php-app/README.md`.
+  growing a bespoke table.
+- **Task/chore instances** (`0009`, issue #12 follow-up): splits
+  `household_tasks` into a pure definition (drops `status`/`next_due_at`,
+  renames `next_due_at` to `start_date`, now `NOT NULL`) plus a new
+  `household_task_instances` table, one row per concrete occurrence,
+  replacing `household_task_completions` (dropped — each instance already
+  carries its own completion state). A daily cron script populates
+  upcoming instances from recurring definitions and purges old
+  completed/expired ones — see "Task/chore tracking" in
+  `php-app/README.md` for why, and the migration's own comment for how it
+  backfills every existing task's *current* state (its individual
+  historical completion events aren't individually replayed, only its
+  latest one).
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations starting at `0009`.
+their own numbered migrations starting at `0010`.
