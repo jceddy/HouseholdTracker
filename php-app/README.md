@@ -33,7 +33,8 @@ database.
   - `Auth/` — Registration, login, session, and password reset logic
     (`AuthService`) plus its exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
-    issue #5; settings, notes, and pets — issue #7) plus its exceptions.
+    issue #5; settings, notes, and pets — issue #7) plus its exceptions;
+    `TaskService`/`RecurrenceCalculator` (task/chore tracking — issue #12).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -93,12 +94,17 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"pet"}`. |
 | POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
 | POST   | `/households/pets/delete` | `{"pet_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/pets/update`. |
+| GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every task/chore in the household. Returns `{"tasks": [{"id","household_id","title","description","assigned_to_user_id","assigned_to_username","status","recurrence_frequency","recurrence_interval","next_due_at","source_type","source_id","created_by_user_id","created_at","updated_at","completion_count","last_completed_at"}]}` — see "Task/chore tracking" below. |
+| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `assigned_to_user_id`, if given, must be a member of the household; `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) requires `due_at` as its schedule anchor. `400` on any validation failure. Returns `{"task"}`. |
+| POST   | `/households/tasks/update` | `{"task_id", "title", "description"?, "assigned_to_user_id"?, "status": "open"\|"in_progress", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such task; `403` if the caller isn't a member of that task's household. `400` if `status` is `"done"` — that's only reachable via `/households/tasks/complete`. Any member may update any task. |
+| POST   | `/households/tasks/delete` | `{"task_id"}`                                    | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. |
+| POST   | `/households/tasks/complete` | `{"task_id", "notes"?}`                        | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. Logs a completion (`notes`: ≤2000 chars) and, for a recurring task, advances `next_due_at` by one interval — see "Task/chore tracking" below. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
 Whatever household-scoped tracker routes come next belong below
-`/households/pets/delete` in `public/index.php`, each guarded by the same
-`requireAuth($auth)` call plus a household-membership check the way
+`/households/tasks/complete` in `public/index.php`, each guarded by the
+same `requireAuth($auth)` call plus a household-membership check the way
 `/households/members` already is.
 
 ## Maintenance mode
@@ -183,6 +189,47 @@ caller to already be a member of the household in question:
   issue #16 (household contacts) hasn't shipped, so there's nothing for it
   to reference; add it via a follow-up migration once #16 lands rather
   than shipping a nullable FK to a table that doesn't exist.
+
+## Task/chore tracking
+
+One-off tasks and recurring chores (`household_tasks`, issue #12), assignable
+to any household member (or left unassigned), with an append-only completion
+history (`household_task_completions`) — a recurring chore's value is in
+seeing it *was* done regularly, not just when it's next due. Tasks are a
+shared household resource, not per-user content, same permission model as
+pets: any member can create/edit/delete/complete any task, not just its
+creator or assignee.
+
+**Recurrence**: `recurrence_frequency` (`daily`/`weekly`/`monthly`/`annual`)
+plus a `recurrence_interval` multiplier covers "every N days/weeks/months/
+years" without a separate `custom` bucket — "every 15 days" is just `daily`
+with `recurrence_interval = 15`. A recurring task's `next_due_at` is its
+schedule anchor and is required; a one-off task's is an optional plain
+deadline (or none at all).
+
+**Completing a task** (`TaskService::completeTask()`) always logs to
+`household_task_completions`. A one-off task is simply marked `done`. A
+recurring one instead advances `next_due_at` by exactly one interval via
+`RecurrenceCalculator::advance()` — calendar-correct for `monthly`/`annual`
+(handles month-end dates and leap years, not a naive `+30 days`), and always
+computed from the task's own *previous scheduled* due date, never from
+whenever it actually got done. This was an explicit open question in issue
+#12: scheduling from the original due date keeps a chore anchored (trash day
+stays Monday) instead of drifting later after an occasional late completion.
+One documented consequence of that choice: `RecurrenceCalculator` clamps
+from whatever `next_due_at` currently *is*, not a remembered original
+day-of-month, so a "31st of every month" task that clamps to Feb 28 stays on
+the 28th from then on rather than springing back to the 31st in longer
+months — see the class's own docblock.
+
+A task's `status` only ever reaches `done` through `/households/tasks/complete`
+— `/households/tasks/update` rejects it outright, so a completed task can
+never exist without a matching completion row.
+
+**Not yet wired up**: `source_type`/`source_id` are reserved, unenforced
+columns for a future meeting (issue #8) or home-improvement project (issue
+#11) to link its own tasks into this same system, per issue #12's
+consolidation recommendation — nothing sets them yet.
 
 ## LLM usage (Fireworks AI)
 

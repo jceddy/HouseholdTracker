@@ -181,6 +181,16 @@ button.button--compact {
     font-size: 0.85rem;
 }
 
+.inline-number-unit {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.inline-number-unit input {
+    width: 5rem;
+}
+
 input {
     font: inherit;
     padding: 0.55rem 0.7rem;
