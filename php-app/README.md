@@ -52,6 +52,8 @@ database.
     `SITE_URL`/`APP_URL`.
 - `bin/migrate.php` — Applies pending database migrations from
   `../database/migrations/` (see that project's README).
+- `bin/generate_task_instances.php` — Daily-cron task/chore maintenance
+  script — see "Task/chore tracking" below.
 - `tests/` — PHPUnit tests.
 
 ## API
@@ -94,12 +96,12 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"pet"}`. |
 | POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
 | POST   | `/households/pets/delete` | `{"pet_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/pets/update`. |
-| GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every task/chore in the household. Returns `{"tasks": [{"id","household_id","title","description","assigned_to_user_id","assigned_to_username","status","recurrence_frequency","recurrence_interval","next_due_at","source_type","source_id","created_by_user_id","created_at","updated_at","completion_count","last_completed_at"}]}` — see "Task/chore tracking" below. |
-| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `assigned_to_user_id`, if given, must be a member of the household; `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) requires `due_at` as its schedule anchor. `400` on any validation failure. Returns `{"task"}`. |
-| POST   | `/households/tasks/update` | `{"task_id", "title", "description"?, "assigned_to_user_id"?, "status": "open"\|"in_progress", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such task; `403` if the caller isn't a member of that task's household. `400` if `status` is `"done"` — that's only reachable via `/households/tasks/complete`. Any member may update any task. |
-| POST   | `/households/tasks/delete` | `{"task_id"}`                                    | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. |
-| POST   | `/households/tasks/complete` | `{"task_id", "notes"?}`                        | Requires auth. Same `404`/`403` rules as `/households/tasks/update`. Logs a completion (`notes`: ≤2000 chars) and, for a recurring task, advances `next_due_at` by one interval — see "Task/chore tracking" below. |
-| GET    | `/tasks/mine`             | —                                                  | Requires auth. Every not-yet-`done` task assigned to the caller across *every* household they belong to (the "My Tasks" view), not scoped to one household — same response shape as `/households/tasks` (plus `household_name`, no `assigned_to_username` since it's always the caller). Completing one of these still goes through `/households/tasks/complete` above. |
+| GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every *pending* task instance in the household (see "Task/chore tracking" below for why only pending). Returns `{"tasks": [{"id","task_id","household_id","title","description","assigned_to_user_id","assigned_to_username","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's. |
+| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `assigned_to_user_id`, if given, must be a member of the household; `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at` defaults to today if omitted. `400` on any validation failure. Creates the definition *and* its first instance in one call. Returns `{"task"}` (same joined shape as the list above). |
+| POST   | `/households/tasks/update` | `{"instance_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such instance; `403` if the caller isn't a member of its household. Updates the parent definition's title/description/assignee/recurrence *and* moves this specific instance's own due date — see "Task/chore tracking" below for why editing doesn't touch the definition's `start_date` or any other instance. Any member may update any task. |
+| POST   | `/households/tasks/delete` | `{"instance_id"}`                                | Requires auth. Same `404`/`403` rules as update. For a recurring task, deletes just this instance (skip this occurrence). For a one-off task (which only ever has one instance), deletes the whole definition too, rather than leaving an orphan behind. |
+| POST   | `/households/tasks/complete` | `{"instance_id", "notes"?}`                    | Requires auth. Same `404`/`403` rules as update. Marks this instance `done` (`notes`: ≤2000 chars) — nothing else happens here; a recurring task's *next* occurrence is a separate row already generated (or waiting to be) by the daily cron script, not something completing this one creates on the spot. |
+| GET    | `/tasks/mine`             | —                                                  | Requires auth. Every pending task instance assigned to the caller across *every* household they belong to (the "My Tasks" view), not scoped to one household — same response shape as `/households/tasks` (plus `household_name`, no `assigned_to_username` since it's always the caller). Completing one of these still goes through `/households/tasks/complete` above. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -193,45 +195,74 @@ caller to already be a member of the household in question:
 
 ## Task/chore tracking
 
-One-off tasks and recurring chores (`household_tasks`, issue #12), assignable
-to any household member (or left unassigned), with an append-only completion
-history (`household_task_completions`) — a recurring chore's value is in
-seeing it *was* done regularly, not just when it's next due. Tasks are a
-shared household resource, not per-user content, same permission model as
-pets: any member can create/edit/delete/complete any task, not just its
-creator or assignee.
+One-off tasks and recurring chores (issue #12), assignable to any household
+member (or left unassigned). Tasks are a shared household resource, not
+per-user content, same permission model as pets: any member can create/edit/
+delete/complete any task, not just its creator or assignee.
+
+**Definition + instances** (`household_tasks` + `household_task_instances`,
+issue #12's own follow-up — see the `0009` migration's comment for the full
+reasoning): `household_tasks` is a pure *definition*, a recurring rule or a
+one-off, with no due date or status of its own — those live on
+`household_task_instances`, one row per concrete occurrence. The first
+version of this feature kept a single mutable row per task (completing it
+advanced its one `next_due_at` in place), which meant an unaddressed
+recurring chore just sat there, increasingly overdue, forever — nothing ever
+created a *new* occurrence on its own. With instances as their own rows, a
+daily cron script can proactively populate the next several days of
+occurrences for every recurring definition, so falling behind on a chore
+shows up in the household Tasks tab as a real backlog of
+individually-completable rows (one per missed occurrence) instead of one
+stuck, increasingly-overdue row.
 
 **Recurrence**: `recurrence_frequency` (`daily`/`weekly`/`monthly`/`annual`)
 plus a `recurrence_interval` multiplier covers "every N days/weeks/months/
 years" without a separate `custom` bucket — "every 15 days" is just `daily`
-with `recurrence_interval = 15`. A recurring task's `next_due_at` is its
-schedule anchor and is required; a one-off task's is an optional plain
-deadline (or none at all).
+with `recurrence_interval = 15`.
 
-**Completing a task** (`TaskService::completeTask()`) always logs to
-`household_task_completions`. A one-off task is simply marked `done`. A
-recurring one instead advances `next_due_at` by exactly one interval via
-`RecurrenceCalculator::advance()` — calendar-correct for `monthly`/`annual`
-(handles month-end dates and leap years, not a naive `+30 days`), and always
-computed from the task's own *previous scheduled* due date, never from
-whenever it actually got done. This was an explicit open question in issue
-#12: scheduling from the original due date keeps a chore anchored (trash day
-stays Monday) instead of drifting later after an occasional late completion.
-One documented consequence of that choice: `RecurrenceCalculator` clamps
-from whatever `next_due_at` currently *is*, not a remembered original
-day-of-month, so a "31st of every month" task that clamps to Feb 28 stays on
-the 28th from then on rather than springing back to the 31st in longer
-months — see the class's own docblock.
+**`bin/generate_task_instances.php`** (run once a day via cron — see "Cron
+setup" below): for every recurring definition, advances from its latest
+existing instance (via `RecurrenceCalculator::advance()` — calendar-correct
+for `monthly`/`annual`, handling month-end dates and leap years rather than
+a naive `+30 days`) and inserts new pending instances up to `LOOKAHEAD_DAYS`
+(7) ahead, looping to catch up on any gap since the last run rather than
+just generating one. Idempotent — the `(task_id, due_at)` unique constraint
+means running it twice in a row, or after missing a day, never double-books
+an occurrence. Its second half purges old instances past `RETENTION_DAYS`
+(90) — completed ones (pure history by that point) and pending ones nobody
+ever completed (so an abandoned chore doesn't clutter the list forever) —
+and then deletes any one-off definition left with zero instances after that
+(a backstop; a one-off's definition and instance are normally deleted
+together, see `/households/tasks/delete` above).
 
-A task's `status` only ever reaches `done` through `/households/tasks/complete`
-— `/households/tasks/update` rejects it outright, so a completed task can
-never exist without a matching completion row.
+**Completing an instance** (`POST /households/tasks/complete`) just marks
+that one row `done` — nothing else happens on the spot. A recurring task's
+*next* occurrence is a separate row, already generated (or waiting to be, on
+the next cron run) rather than something completion creates synchronously;
+this was an explicit open question in issue #12, resolved this way (rather
+than advancing from whenever it actually got done) so a chore's schedule
+stays anchored to its original cadence — trash day stays Monday — instead of
+drifting later after an occasional late completion. One documented
+consequence: `RecurrenceCalculator` clamps from whatever the *latest*
+instance's due date currently is, not a remembered original day-of-month, so
+a "31st of every month" task that's clamped to Feb 28 once stays on the 28th
+from then on rather than springing back to the 31st in a later longer month
+— see the class's own docblock.
 
-**"My Tasks" (`GET /tasks/mine`)**: a cross-household view — every
-not-yet-`done` task assigned to the caller, across every household they
-belong to, ordered by due date the same way as a single household's list.
-`HouseholdTaskRepository::listAssignedToUser()`'s query joins back to
-`household_members` (matching both the household and the assignee) so a
+**Editing** (`POST /households/tasks/update`) updates the parent
+definition's title/description/assignee/recurrence *and* moves the specific
+instance being edited to a new due date — but doesn't touch the
+definition's `start_date` or any other instance. `start_date` is only ever
+read once, the moment a task has zero instances (shouldn't normally happen);
+otherwise cron always advances from whatever the latest instance's due date
+actually is, so a manual edit's new date naturally becomes the anchor the
+*next* generated occurrence advances from.
+
+**"My Tasks" (`GET /tasks/mine`)**: a cross-household view — every pending
+instance assigned to the caller, across every household they belong to,
+ordered by due date the same way as a single household's list.
+`HouseholdTaskInstanceRepository::listAssignedToUser()`'s query joins back
+to `household_members` (matching both the household and the assignee) so a
 task doesn't keep showing up here after its assignee has since left that
 household — removing a member doesn't clear `assigned_to_user_id` on their
 existing tasks, so without that join a stale assignment would otherwise
@@ -241,6 +272,28 @@ linger forever.
 columns for a future meeting (issue #8) or home-improvement project (issue
 #11) to link its own tasks into this same system, per issue #12's
 consolidation recommendation — nothing sets them yet.
+
+### Cron setup
+
+Bluehost's shared hosting runs cron jobs directly on the same box the app is
+deployed to (unlike the deploy pipeline's own migration step, which needs an
+HTTP round trip since the GitHub Actions runner can't reach the database
+directly) — so this is a plain CLI script, invoked with no network
+indirection, set up once per environment via cPanel's own **Cron Jobs**
+page:
+
+- **Command**: `php /home/<cpanel-user>/<site-directory>/bin/generate_task_instances.php >> /home/<cpanel-user>/logs/task-instances.log 2>&1`
+  (exact paths depend on the domain's document root — the same one
+  `DEV_FTP_SERVER_DIR`/production's server-dir point at; `bin/` deploys as a
+  sibling of `app/`, `src/`, `vendor/`, denied to web requests via its own
+  `.htaccess`, the same as those).
+- **Schedule**: once daily (e.g. `0 6 * * *` for 6am server time) is enough
+  given `LOOKAHEAD_DAYS`/`RETENTION_DAYS` above; running it more often is
+  harmless (idempotent) but pointless.
+- Set this up separately for the dev and production domains, same as the
+  `MIGRATION_DEPLOY_KEY` one-time setup in `database/README.md` — cPanel
+  cron entries aren't part of the repo or the deploy workflow, so a fresh
+  environment needs this configured by hand once.
 
 ## LLM usage (Fireworks AI)
 

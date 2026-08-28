@@ -94,6 +94,12 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
+          # CLI-only maintenance scripts (e.g. generate_task_instances.php),
+          # invoked directly by a cPanel cron job on the host -- not part of
+          # any HTTP route, so it's denied via .htaccess below same as
+          # src/vendor/database.
+          cp -R php-app/bin dist/bin
+
           # Migration files, so the "Run database migrations" step below
           # (a POST /migrate call against the just-deployed app, which has
           # no shell access of its own) can find them via
@@ -144,6 +150,7 @@ jobs:
           echo 'Require all denied' > dist/vendor/.htaccess
           echo 'Require all denied' > dist/src/.htaccess
           echo 'Require all denied' > dist/database/.htaccess
+          echo 'Require all denied' > dist/bin/.htaccess
 
       - name: Deploy to Bluehost via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0

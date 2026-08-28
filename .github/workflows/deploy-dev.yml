@@ -89,6 +89,7 @@ jobs:
           cp -R php-app/public/. dist/app/
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
+          cp -R php-app/bin dist/bin
 
           mkdir -p dist/database
           cp -R database/migrations dist/database/migrations
@@ -125,6 +126,7 @@ jobs:
           echo 'Require all denied' > dist/vendor/.htaccess
           echo 'Require all denied' > dist/src/.htaccess
           echo 'Require all denied' > dist/database/.htaccess
+          echo 'Require all denied' > dist/bin/.htaccess
 
       - name: Deploy to Bluehost via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
