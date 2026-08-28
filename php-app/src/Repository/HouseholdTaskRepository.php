@@ -73,6 +73,38 @@ final class HouseholdTaskRepository
         return $stmt->fetchAll();
     }
 
+    /**
+     * listAssignedToUser(...) - every open/in_progress task assigned to this
+     * user across *every* household they belong to (the "My Tasks" view),
+     * not just one. The INNER JOIN back to household_members (matching both
+     * the household and the assignee) guards against a stale assignment
+     * surviving after the assignee has since left that household -- removing
+     * a member doesn't currently clear assigned_to_user_id on their tasks,
+     * so without this join a former member would keep seeing that
+     * household's tasks here forever. Same due-date-ascending,
+     * undated-last ordering as listForHousehold().
+     */
+    public function listAssignedToUser(int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT household_tasks.*, households.name AS household_name,
+                    COUNT(household_task_completions.id) AS completion_count,
+                    MAX(household_task_completions.completed_at) AS last_completed_at
+             FROM household_tasks
+             INNER JOIN households ON households.id = household_tasks.household_id
+             INNER JOIN household_members
+                 ON household_members.household_id = household_tasks.household_id
+                AND household_members.user_id = household_tasks.assigned_to_user_id
+             LEFT JOIN household_task_completions ON household_task_completions.task_id = household_tasks.id
+             WHERE household_tasks.assigned_to_user_id = :user_id AND household_tasks.status != 'done'
+             GROUP BY household_tasks.id
+             ORDER BY (household_tasks.next_due_at IS NULL), household_tasks.next_due_at ASC, household_tasks.created_at DESC"
+        );
+        $stmt->execute(['user_id' => $userId]);
+
+        return $stmt->fetchAll();
+    }
+
     public function update(
         int $id,
         string $title,

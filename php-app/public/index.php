@@ -892,6 +892,11 @@ if ($path === '/households/tasks/complete' && $method === 'POST') {
     }
 }
 
+if ($path === '/tasks/mine' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'tasks' => $tasks->listMyTasks((int) $currentUser['id'])]);
+}
+
 // Further household-tracking domain routes (finances, calendar, whatever
 // this app actually ends up tracking) go here.
 

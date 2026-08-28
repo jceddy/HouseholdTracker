@@ -164,7 +164,8 @@ form {
     margin-bottom: 1.25rem;
 }
 
-button.tab-button {
+button.tab-button,
+button.top-tab-button {
     background: none;
     color: var(--color-muted);
     font-weight: 600;
@@ -175,17 +176,20 @@ button.tab-button {
     margin-bottom: -1px;
 }
 
-button.tab-button:hover {
+button.tab-button:hover,
+button.top-tab-button:hover {
     color: var(--color-text);
     background: var(--color-surface);
 }
 
-button.tab-button[aria-selected="true"] {
+button.tab-button[aria-selected="true"],
+button.top-tab-button[aria-selected="true"] {
     color: var(--color-accent);
     border-bottom-color: var(--color-accent);
 }
 
-.tab-panel {
+.tab-panel,
+.top-tab-panel {
     margin-bottom: 2rem;
 }
 
