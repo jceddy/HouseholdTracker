@@ -15,10 +15,22 @@ use HouseholdTracker\Database\Connection;
  * set for an 'everyone'-mode task's own per-assignee copy of an occurrence
  * -- NULL for a shared ('anyone'-mode, or 0/1-assignee) instance. See
  * TaskService's docblock for the full anyone/everyone design.
+ *
+ * `due_at` (migration `0011`) is nullable: NULL means an open-ended
+ * one-off task with no deadline. Only ever NULL for a one-off task's
+ * instance -- a recurring task's occurrences always carry a real date, see
+ * TaskService's docblock.
  */
 final class HouseholdTaskInstanceRepository
 {
-    public function create(int $taskId, string $dueAt, ?int $assignedToUserId = null): array
+    /**
+     * FIELD() returns each value's 1-based position in the list (0 if
+     * NULL/unmatched); ascending on that puts 'critical' first and 'low'
+     * last -- "reverse-priority order (highest priority to lowest)".
+     */
+    private const PRIORITY_ORDER_SQL = "FIELD(household_tasks.priority, 'critical', 'high', 'medium', 'low')";
+
+    public function create(int $taskId, ?string $dueAt, ?int $assignedToUserId = null): array
     {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
@@ -51,7 +63,7 @@ final class HouseholdTaskInstanceRepository
     {
         $stmt = Connection::get()->prepare(
             'SELECT household_task_instances.*, household_tasks.household_id, household_tasks.title,
-                    household_tasks.description, household_tasks.assignment_mode,
+                    household_tasks.description, household_tasks.assignment_mode, household_tasks.priority,
                     household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
                     assignee.username AS assigned_to_username
              FROM household_task_instances
@@ -85,16 +97,19 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
-     * existsForTaskAndDate(...) - $assignedToUserId is compared with
-     * MySQL/MariaDB's NULL-safe `<=>` operator (plain `=` never matches
-     * NULL against NULL), since a shared ('anyone'-mode) instance's
-     * assigned_to_user_id is itself NULL.
+     * existsForTaskAndDate(...) - $dueAt and $assignedToUserId are both
+     * compared with MySQL/MariaDB's NULL-safe `<=>` operator (plain `=`
+     * never matches NULL against NULL): $assignedToUserId since a shared
+     * ('anyone'-mode) instance's is itself NULL, $dueAt so this stays
+     * correct if ever called for an open-ended task -- in practice cron
+     * (the only caller) never does, since it only generates recurring
+     * occurrences, which always have a real due date.
      */
-    public function existsForTaskAndDate(int $taskId, string $dueAt, ?int $assignedToUserId): bool
+    public function existsForTaskAndDate(int $taskId, ?string $dueAt, ?int $assignedToUserId): bool
     {
         $stmt = Connection::get()->prepare(
             'SELECT 1 FROM household_task_instances
-             WHERE task_id = :task_id AND due_at = :due_at AND assigned_to_user_id <=> :assigned_to_user_id
+             WHERE task_id = :task_id AND due_at <=> :due_at AND assigned_to_user_id <=> :assigned_to_user_id
              LIMIT 1'
         );
         $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId]);
@@ -102,7 +117,7 @@ final class HouseholdTaskInstanceRepository
         return $stmt->fetch() !== false;
     }
 
-    public function updateDueAt(int $id, string $dueAt): void
+    public function updateDueAt(int $id, ?string $dueAt): void
     {
         $stmt = Connection::get()->prepare('UPDATE household_task_instances SET due_at = :due_at WHERE id = :id');
         $stmt->execute(['due_at' => $dueAt, 'id' => $id]);
@@ -134,12 +149,17 @@ final class HouseholdTaskInstanceRepository
      * that task's *other*, done instances -- via correlated subqueries
      * rather than a join, since the main result set is filtered to pending
      * while the summary needs to see done ones too.
+     *
+     * ORDER BY bubbles every open-ended (NULL due_at) instance to the top,
+     * highest priority first -- see self::PRIORITY_ORDER_SQL -- ahead of
+     * every dated instance, which keep the original ascending-due-date
+     * order below them unaffected by priority.
      */
     public function listForHousehold(int $householdId): array
     {
         $stmt = Connection::get()->prepare(
             "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
-                    household_tasks.assignment_mode, household_tasks.recurrence_frequency,
+                    household_tasks.assignment_mode, household_tasks.priority, household_tasks.recurrence_frequency,
                     household_tasks.recurrence_interval, assignee.username AS assigned_to_username,
                     (SELECT COUNT(*) FROM household_task_instances completed
                         WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
@@ -149,7 +169,8 @@ final class HouseholdTaskInstanceRepository
              INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
              LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
              WHERE household_tasks.household_id = :household_id AND household_task_instances.status = 'pending'
-             ORDER BY household_task_instances.due_at ASC, household_task_instances.created_at DESC"
+             ORDER BY (household_task_instances.due_at IS NULL) DESC, " . self::PRIORITY_ORDER_SQL . ",
+                      household_task_instances.due_at ASC, household_task_instances.created_at DESC"
         );
         $stmt->execute(['household_id' => $householdId]);
 
@@ -164,13 +185,21 @@ final class HouseholdTaskInstanceRepository
      * Same household_members join guard as before the multi-assignee
      * follow-up, for the same reason: a stale assignment shouldn't keep
      * surfacing here after the assignee has since left that household.
+     *
+     * Same open-ended-bubbles-to-top-by-priority ordering as
+     * listForHousehold() -- see self::PRIORITY_ORDER_SQL -- since this is
+     * the one place an open-ended task (issue #12's own follow-up) is meant
+     * to actually surface: a "no deadline" reminder like "put the new latch
+     * on the back gate" is exactly the kind of thing that should jump to
+     * the top of *someone's* personal list instead of getting buried under
+     * dated chores.
      */
     public function listAssignedToUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
             "SELECT household_task_instances.*, household_tasks.household_id, households.name AS household_name,
                     household_tasks.title, household_tasks.description, household_tasks.assignment_mode,
-                    household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
+                    household_tasks.priority, household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
                     (SELECT COUNT(*) FROM household_task_instances completed
                         WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
                     (SELECT MAX(completed.completed_at) FROM household_task_instances completed
@@ -187,7 +216,8 @@ final class HouseholdTaskInstanceRepository
              WHERE household_task_instances.status = 'pending'
                AND (household_task_instances.assigned_to_user_id IS NULL OR household_task_instances.assigned_to_user_id = :user_id_instance)
              GROUP BY household_task_instances.id
-             ORDER BY household_task_instances.due_at ASC, household_task_instances.created_at DESC"
+             ORDER BY (household_task_instances.due_at IS NULL) DESC, " . self::PRIORITY_ORDER_SQL . ",
+                      household_task_instances.due_at ASC, household_task_instances.created_at DESC"
         );
         $stmt->execute(['user_id_assignee' => $userId, 'user_id_instance' => $userId]);
 
