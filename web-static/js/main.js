@@ -146,6 +146,12 @@
         button.addEventListener('click', () => activateTopTab(button.dataset.topTab));
     }
 
+    // Re-fetch My Tasks every time it's navigated to, rather than only once
+    // at page load -- a task added/completed elsewhere (or by someone else)
+    // since the last load otherwise wouldn't show up here without a manual
+    // page refresh.
+    document.querySelector('.top-tab-button[data-top-tab="my-tasks"]').addEventListener('click', () => loadMyTasks());
+
     async function openHouseholdDetail(householdId, householdName) {
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
@@ -784,6 +790,7 @@
     });
 
     document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
+    document.getElementById('my-tasks-refresh-button').addEventListener('click', () => loadMyTasks());
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });

@@ -172,10 +172,13 @@
     </div>
 
     <div class="top-tab-panel" id="top-tab-panel-my-tasks" role="tabpanel" hidden>
-        <label class="checkbox-label">
-            <input type="checkbox" id="my-tasks-show-open-ended" checked>
-            Show open-ended tasks
-        </label>
+        <div class="form-row">
+            <label class="checkbox-label">
+                <input type="checkbox" id="my-tasks-show-open-ended" checked>
+                Show open-ended tasks
+            </label>
+            <button type="button" id="my-tasks-refresh-button" class="button--compact">Refresh</button>
+        </div>
         <ul id="my-tasks-list"></ul>
     </div>
 
