@@ -11,9 +11,9 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
 /**
  * Household task/chore tracking (issue #12): one-off tasks and recurring
  * chores (daily/weekly/monthly/annual, on an N-interval), assignable to any
- * household member. Tasks are a shared household resource, not per-user
- * content -- like pets (issue #7), any member may create/edit/delete/
- * complete any task, not just its creator or assignee.
+ * number of household members. Tasks are a shared household resource, not
+ * per-user content -- like pets (issue #7), any member may create/edit/
+ * delete/complete any task, regardless of who created or is assigned it.
  *
  * Reworked into a definition (HouseholdTaskRepository)+instances
  * (HouseholdTaskInstanceRepository) split by a follow-up to #12 -- see
@@ -24,10 +24,22 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * and, implicitly, updateTask() -- which edits both the instance being
  * looked at *and* its parent definition in one call, since from the UI's
  * side there's just one "task" being edited, not two separate objects.
+ *
+ * Multiple assignees (#12's own follow-up, migration `0010`) add
+ * `assignment_mode`, deciding what 2+ assignees on a task means:
+ *   - 'anyone' (the default): one shared instance per occurrence -- whoever
+ *     completes it first completes it for everyone assigned.
+ *   - 'everyone': each assignee gets their own instance row for the same
+ *     occurrence (see createTask()/HouseholdTaskInstanceRepository's own
+ *     docblock) and must complete their own copy; the others are unaffected.
+ * A task's assignee list is edited as a whole (replaceAssignees()), the
+ * same way its other fields are -- there's no separate add/remove-one-
+ * assignee endpoint.
  */
 final class TaskService
 {
     private const RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'monthly', 'annual'];
+    private const ASSIGNMENT_MODES = ['anyone', 'everyone'];
     private const MAX_RECURRENCE_INTERVAL = 1000;
     private const MAX_NOTES_LENGTH = 2000;
 
@@ -42,7 +54,7 @@ final class TaskService
     {
         $this->requireMember($householdId, $callerId);
 
-        return $this->instances->listForHousehold($householdId);
+        return $this->attachAssignees($this->instances->listForHousehold($householdId));
     }
 
     /**
@@ -54,45 +66,68 @@ final class TaskService
      */
     public function listMyTasks(int $userId): array
     {
-        return $this->instances->listAssignedToUser($userId);
+        return $this->attachAssignees($this->instances->listAssignedToUser($userId));
     }
 
+    /**
+     * createTask(...) - returns an *array of* created instance rows rather
+     * than a single one: 'anyone' mode (the default, and the only
+     * meaningful choice for 0/1 assignees) creates one shared instance, but
+     * 'everyone' mode creates one per assignee for this same occurrence
+     * (see HouseholdTaskInstanceRepository::create()'s $assignedToUserId).
+     *
+     * @param array<int> $assignedToUserIds
+     */
     public function createTask(
         int $callerId,
         int $householdId,
         string $title,
         ?string $description,
-        ?int $assignedToUserId,
+        array $assignedToUserIds,
+        ?string $assignmentMode,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         ?string $dueAt
     ): array {
         $this->requireMember($householdId, $callerId);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
-        $this->requireMemberIfAssigned($householdId, $assignedToUserId);
+        $assignmentMode = $this->validateAssignmentMode($assignmentMode);
+        $assignedToUserIds = $this->validateAssignees($householdId, $assignedToUserIds, $assignmentMode);
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
         $dueAt = $this->validateDueAt($dueAt);
 
-        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignedToUserId, $recurrenceFrequency, $recurrenceInterval, $dueAt);
-        $instance = $this->instances->create((int) $task['id'], $dueAt);
+        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignmentMode, $recurrenceFrequency, $recurrenceInterval, $dueAt);
+        $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
 
-        return $this->instances->findByIdWithTaskInfo((int) $instance['id']);
+        $instances = $assignmentMode === 'everyone'
+            ? array_map(fn (int $userId): array => $this->instances->create((int) $task['id'], $dueAt, $userId), $assignedToUserIds)
+            : [$this->instances->create((int) $task['id'], $dueAt)];
+
+        return $this->attachAssignees(array_map(
+            fn (array $instance): array => $this->instances->findByIdWithTaskInfo((int) $instance['id']),
+            $instances
+        ));
     }
 
     /**
      * updateTask(...) - edits the parent definition's title/description/
-     * assignee/recurrence, *and* moves this specific instance's own due
-     * date. Doesn't touch the definition's start_date (see
+     * assignees/mode/recurrence, *and* moves this specific instance's own
+     * due date. Doesn't touch the definition's start_date (see
      * HouseholdTaskRepository::update()'s own docblock) or any other
      * instance -- a recurring task's already-generated future occurrences
-     * keep whatever dates cron gave them.
+     * keep whatever dates cron gave them, and changing the assignee list
+     * here doesn't retroactively create or delete instances for the
+     * newly-added/removed assignees, only affect what cron generates next.
+     *
+     * @param array<int> $assignedToUserIds
      */
     public function updateTask(
         int $callerId,
         int $instanceId,
         string $title,
         ?string $description,
-        ?int $assignedToUserId,
+        array $assignedToUserIds,
+        ?string $assignmentMode,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         ?string $dueAt
@@ -100,36 +135,39 @@ final class TaskService
         $instance = $this->requireMemberForInstance($callerId, $instanceId);
         $task = $this->tasks->findById((int) $instance['task_id']);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
-        $this->requireMemberIfAssigned((int) $task['household_id'], $assignedToUserId);
+        $assignmentMode = $this->validateAssignmentMode($assignmentMode);
+        $assignedToUserIds = $this->validateAssignees((int) $task['household_id'], $assignedToUserIds, $assignmentMode);
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
         $dueAt = $this->validateDueAt($dueAt);
 
-        $this->tasks->update((int) $task['id'], $title, $description, $assignedToUserId, $recurrenceFrequency, $recurrenceInterval);
+        $this->tasks->update((int) $task['id'], $title, $description, $assignmentMode, $recurrenceFrequency, $recurrenceInterval);
+        $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
         $this->instances->updateDueAt($instanceId, $dueAt);
 
-        return $this->instances->findByIdWithTaskInfo($instanceId);
+        return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
     }
 
     /**
-     * deleteInstance(...) - a one-off task has exactly one instance ever,
-     * so deleting it deletes the whole definition (which cascades back to
-     * the instance itself) rather than leaving an orphaned definition
-     * behind. A recurring task's instance is just one occurrence among
-     * others (existing and future), so only that row goes -- "skip this
-     * occurrence" -- leaving the definition and its other instances alone.
+     * deleteInstance(...) - deletes this occurrence first, then cascades to
+     * the whole definition only if it's one-off (never for a recurring
+     * task, regardless of instance count) *and* has no instances left --
+     * covers both a single-assignee one-off (its one and only instance) and
+     * an 'everyone'-mode one-off (each assignee's own copy needs deleting
+     * before the definition goes). A recurring task's instance is just one
+     * occurrence among others (existing and future), so only that row goes
+     * -- "skip this occurrence" -- leaving the definition and its other
+     * instances alone.
      */
     public function deleteInstance(int $callerId, int $instanceId): void
     {
         $instance = $this->requireMemberForInstance($callerId, $instanceId);
         $task = $this->tasks->findById((int) $instance['task_id']);
 
-        if ($task['recurrence_frequency'] === null) {
-            $this->tasks->delete((int) $task['id']);
-
-            return;
-        }
-
         $this->instances->delete($instanceId);
+
+        if ($task['recurrence_frequency'] === null && $this->instances->countForTask((int) $task['id']) === 0) {
+            $this->tasks->delete((int) $task['id']);
+        }
     }
 
     public function completeInstance(int $callerId, int $instanceId, ?string $notes): array
@@ -144,7 +182,7 @@ final class TaskService
 
         $this->instances->markDone($instanceId, $callerId, $notes);
 
-        return $this->instances->findByIdWithTaskInfo($instanceId);
+        return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
     }
 
     private function requireMemberForInstance(int $callerId, int $instanceId): array
@@ -160,11 +198,64 @@ final class TaskService
         return $instance;
     }
 
-    private function requireMemberIfAssigned(int $householdId, ?int $assignedToUserId): void
+    /**
+     * attachAssignees(...) - bulk-attaches each row's task's assignee list
+     * (as an `assignees` key: [{id, username}, ...]) in one query rather
+     * than one per row, since listTasks()/listMyTasks() can return rows
+     * spanning many different tasks.
+     */
+    private function attachAssignees(array $rows): array
     {
-        if ($assignedToUserId !== null && $this->members->find($householdId, $assignedToUserId) === null) {
-            throw new \InvalidArgumentException('Assignee must be a member of this household.');
+        $taskIds = array_values(array_unique(array_map(fn (array $row): int => (int) $row['task_id'], $rows)));
+        $assigneesByTask = [];
+        foreach ($this->tasks->listAssigneesForTasks($taskIds) as $assignee) {
+            $assigneesByTask[(int) $assignee['task_id']][] = ['id' => (int) $assignee['id'], 'username' => $assignee['username']];
         }
+
+        return array_map(function (array $row) use ($assigneesByTask): array {
+            $row['assignees'] = $assigneesByTask[(int) $row['task_id']] ?? [];
+
+            return $row;
+        }, $rows);
+    }
+
+    /**
+     * validateAssignees(...) - every id must be a member of the household;
+     * 'everyone' mode additionally requires at least one, since a task
+     * nobody's assigned to has nothing to generate per-assignee copies of.
+     * 0/1 assignees with 'everyone' mode is allowed (behaviorally identical
+     * to 'anyone' in that case) rather than specially rejected -- keeps the
+     * validation rule simple, and the UI can still just default to 'anyone'.
+     *
+     * @param array<int> $assignedToUserIds
+     *
+     * @return array<int>
+     */
+    private function validateAssignees(int $householdId, array $assignedToUserIds, string $assignmentMode): array
+    {
+        $assignedToUserIds = array_values(array_unique(array_map('intval', $assignedToUserIds)));
+
+        foreach ($assignedToUserIds as $userId) {
+            if ($this->members->find($householdId, $userId) === null) {
+                throw new \InvalidArgumentException('Assignees must be members of this household.');
+            }
+        }
+
+        if ($assignmentMode === 'everyone' && $assignedToUserIds === []) {
+            throw new \InvalidArgumentException("'everyone' assignment mode requires at least one assignee.");
+        }
+
+        return $assignedToUserIds;
+    }
+
+    private function validateAssignmentMode(?string $assignmentMode): string
+    {
+        $assignmentMode = $assignmentMode !== null && $assignmentMode !== '' ? $assignmentMode : 'anyone';
+        if (!in_array($assignmentMode, self::ASSIGNMENT_MODES, true)) {
+            throw new \InvalidArgumentException('assignment_mode must be one of: ' . implode(', ', self::ASSIGNMENT_MODES) . '.');
+        }
+
+        return $assignmentMode;
     }
 
     private function validateTitleAndDescription(string $title, ?string $description): array

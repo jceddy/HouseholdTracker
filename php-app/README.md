@@ -96,12 +96,12 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"pet"}`. |
 | POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
 | POST   | `/households/pets/delete` | `{"pet_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/pets/update`. |
-| GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every *pending* task instance in the household (see "Task/chore tracking" below for why only pending). Returns `{"tasks": [{"id","task_id","household_id","title","description","assigned_to_user_id","assigned_to_username","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's. |
-| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `assigned_to_user_id`, if given, must be a member of the household; `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at` defaults to today if omitted. `400` on any validation failure. Creates the definition *and* its first instance in one call. Returns `{"task"}` (same joined shape as the list above). |
-| POST   | `/households/tasks/update` | `{"instance_id", "title", "description"?, "assigned_to_user_id"?, "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such instance; `403` if the caller isn't a member of its household. Updates the parent definition's title/description/assignee/recurrence *and* moves this specific instance's own due date — see "Task/chore tracking" below for why editing doesn't touch the definition's `start_date` or any other instance. Any member may update any task. |
-| POST   | `/households/tasks/delete` | `{"instance_id"}`                                | Requires auth. Same `404`/`403` rules as update. For a recurring task, deletes just this instance (skip this occurrence). For a one-off task (which only ever has one instance), deletes the whole definition too, rather than leaving an orphan behind. |
-| POST   | `/households/tasks/complete` | `{"instance_id", "notes"?}`                    | Requires auth. Same `404`/`403` rules as update. Marks this instance `done` (`notes`: ≤2000 chars) — nothing else happens here; a recurring task's *next* occurrence is a separate row already generated (or waiting to be) by the daily cron script, not something completing this one creates on the spot. |
-| GET    | `/tasks/mine`             | —                                                  | Requires auth. Every pending task instance assigned to the caller across *every* household they belong to (the "My Tasks" view), not scoped to one household — same response shape as `/households/tasks` (plus `household_name`, no `assigned_to_username` since it's always the caller). Completing one of these still goes through `/households/tasks/complete` above. |
+| GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every *pending* task instance in the household (see "Task/chore tracking" below for why only pending). Returns `{"tasks": [{"id","task_id","household_id","title","description","assignment_mode","assigned_to_user_id","assigned_to_username","assignees","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's; `assigned_to_user_id`/`assigned_to_username` are *this instance's own* assignee (only ever set for one of an `'everyone'`-mode task's per-assignee copies, see "Task/chore tracking" below), `assignees` is the full `[{"id","username"}, ...]` list for the parent task regardless of mode. |
+| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; every id in `assigned_to_user_ids` must be a member of the household; `assignment_mode` defaults to `"anyone"` and must be `"everyone"` only with at least one assignee (`400` otherwise); `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at` defaults to today if omitted. `400` on any validation failure. Creates the definition *and* its first instance(s) in one call — one shared instance for `"anyone"` mode, one per assignee for `"everyone"` mode. Returns `{"tasks": [...]}` (an *array*, since `"everyone"` mode can create more than one instance — each in the same joined shape as the list above). |
+| POST   | `/households/tasks/update` | `{"instance_id", "title", "description"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?}` | Requires auth. `404` if no such instance; `403` if the caller isn't a member of its household. Updates the parent definition's title/description/assignees/mode/recurrence *and* moves this specific instance's own due date — see "Task/chore tracking" below for why editing doesn't touch the definition's `start_date`, any other instance, or retroactively create/delete instances for an assignee added/removed by this call. Any member may update any task. Returns `{"task"}` (single row, unlike the create route above). |
+| POST   | `/households/tasks/delete` | `{"instance_id"}`                                | Requires auth. Same `404`/`403` rules as update. For a recurring task, deletes just this instance (skip this occurrence). For a one-off task, deletes the instance and then, only once that leaves the definition with zero remaining instances, the definition too — covers both a single-assignee one-off (its one instance) and an `"everyone"`-mode one-off (each assignee's own copy needs deleting first) without leaving an orphaned definition behind. |
+| POST   | `/households/tasks/complete` | `{"instance_id", "notes"?}`                    | Requires auth. Same `404`/`403` rules as update. Marks this instance `done` (`notes`: ≤2000 chars) — nothing else happens here; a recurring task's *next* occurrence is a separate row already generated (or waiting to be) by the daily cron script, not something completing this one creates on the spot. In `"everyone"` mode this only completes *this assignee's own copy* — the others' instances are untouched, unlike `"anyone"` mode where any one of them completing the single shared instance finishes it for all. |
+| GET    | `/tasks/mine`             | —                                                  | Requires auth. Every pending task instance that's this user's own to act on across *every* household they belong to (the "My Tasks" view), not scoped to one household — either a shared `"anyone"`-mode instance for a task they're one of the assignees on, or their own personal `"everyone"`-mode copy. Same response shape as `/households/tasks` (plus `household_name`). Completing one of these still goes through `/households/tasks/complete` above. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -195,10 +195,13 @@ caller to already be a member of the household in question:
 
 ## Task/chore tracking
 
-One-off tasks and recurring chores (issue #12), assignable to any household
-member (or left unassigned). Tasks are a shared household resource, not
-per-user content, same permission model as pets: any member can create/edit/
-delete/complete any task, not just its creator or assignee.
+One-off tasks and recurring chores (issue #12), assignable to any number of
+household members (or left unassigned), with an `assignment_mode` deciding
+what 2+ assignees means — see "Multiple assignees" below. Tasks are a shared
+household resource, not per-user content, same permission model as pets: any
+member can create/edit/delete/complete any task, regardless of who created or
+is assigned it (in `"everyone"` mode this means, e.g., any member can
+complete a *different* assignee's own instance copy on their behalf).
 
 **Definition + instances** (`household_tasks` + `household_task_instances`,
 issue #12's own follow-up — see the `0009` migration's comment for the full
@@ -215,6 +218,25 @@ shows up in the household Tasks tab as a real backlog of
 individually-completable rows (one per missed occurrence) instead of one
 stuck, increasingly-overdue row.
 
+**Multiple assignees** (issue #12's own follow-up, migration `0010`):
+`household_task_assignees` is a plain many-to-many join table (task + user)
+rather than the single nullable `household_tasks.assigned_to_user_id`
+column the feature originally shipped with. `household_tasks.assignment_mode`
+decides what 2+ assignees means:
+  - `"anyone"` (the default, and the only meaningful mode for 0/1 assignees):
+    one shared instance per occurrence (`assigned_to_user_id` null on the
+    instance) — whoever completes it first completes it for every assignee.
+  - `"everyone"`: one instance row *per assignee* for the same occurrence
+    (`assigned_to_user_id` set to that assignee's own id), each completed
+    independently — reuses every existing per-instance complete/list/delete
+    code path as-is rather than needing a separate per-person
+    completion-tracking table. Requires at least one assignee (`400`
+    otherwise, since there'd be nothing to generate a copy for).
+An assignee list is edited as a whole (`HouseholdTaskRepository::
+replaceAssignees()`), the same way a task's other fields are — there's no
+separate add/remove-one-assignee route, and editing one doesn't retroactively
+create or delete instances for the change (see "Editing" below).
+
 **Recurrence**: `recurrence_frequency` (`daily`/`weekly`/`monthly`/`annual`)
 plus a `recurrence_interval` multiplier covers "every N days/weeks/months/
 years" without a separate `custom` bucket — "every 15 days" is just `daily`
@@ -226,9 +248,17 @@ existing instance (via `RecurrenceCalculator::advance()` — calendar-correct
 for `monthly`/`annual`, handling month-end dates and leap years rather than
 a naive `+30 days`) and inserts new pending instances up to `LOOKAHEAD_DAYS`
 (7) ahead, looping to catch up on any gap since the last run rather than
-just generating one. Idempotent — the `(task_id, due_at)` unique constraint
-means running it twice in a row, or after missing a day, never double-books
-an occurrence. Its second half purges old instances past `RETENTION_DAYS`
+just generating one. For each occurrence date, `"anyone"`-mode definitions
+get one shared instance and `"everyone"`-mode ones get one per current
+assignee (`HouseholdTaskRepository::listAssigneeIds()`) — so adding or
+removing an assignee on an `"everyone"`-mode task only changes what the
+*next* cron run generates, not any instance already created. Idempotent —
+the `(task_id, due_at, assigned_to_user_id)` unique constraint plus an
+exists-check before every insert means running it twice in a row, or after
+missing a day, never double-books an occurrence (see the `0010` migration's
+own comment for why the unique constraint alone isn't quite enough for a
+shared instance's null `assigned_to_user_id`). Its second half purges old
+instances past `RETENTION_DAYS`
 (90) — completed ones (pure history by that point) and pending ones nobody
 ever completed (so an abandoned chore doesn't clutter the list forever) —
 and then deletes any one-off definition left with zero instances after that
@@ -250,23 +280,29 @@ from then on rather than springing back to the 31st in a later longer month
 — see the class's own docblock.
 
 **Editing** (`POST /households/tasks/update`) updates the parent
-definition's title/description/assignee/recurrence *and* moves the specific
-instance being edited to a new due date — but doesn't touch the
-definition's `start_date` or any other instance. `start_date` is only ever
+definition's title/description/assignees/mode/recurrence *and* moves the
+specific instance being edited to a new due date — but doesn't touch the
+definition's `start_date`, any other instance, or retroactively create/delete
+instances for an assignee just added/removed (that only takes effect on the
+*next* cron-generated occurrence; the instance being edited keeps whichever
+specific assignee, if any, it already had). `start_date` is only ever
 read once, the moment a task has zero instances (shouldn't normally happen);
 otherwise cron always advances from whatever the latest instance's due date
 actually is, so a manual edit's new date naturally becomes the anchor the
 *next* generated occurrence advances from.
 
 **"My Tasks" (`GET /tasks/mine`)**: a cross-household view — every pending
-instance assigned to the caller, across every household they belong to,
-ordered by due date the same way as a single household's list.
-`HouseholdTaskInstanceRepository::listAssignedToUser()`'s query joins back
-to `household_members` (matching both the household and the assignee) so a
+instance that's the caller's own to act on, across every household they
+belong to, ordered by due date the same way as a single household's list:
+either a shared `"anyone"`-mode instance for a task they're one of the
+assignees on, or their own personal `"everyone"`-mode copy.
+`HouseholdTaskInstanceRepository::listAssignedToUser()`'s query joins
+`household_task_assignees` (the definition's assignee list) back to
+`household_members` (matching both the household and the assignee) so a
 task doesn't keep showing up here after its assignee has since left that
-household — removing a member doesn't clear `assigned_to_user_id` on their
-existing tasks, so without that join a stale assignment would otherwise
-linger forever.
+household — removing a member doesn't clear their rows out of
+`household_task_assignees`, so without that join a stale assignment would
+otherwise linger forever.
 
 **Not yet wired up**: `source_type`/`source_id` are reserved, unenforced
 columns for a future meeting (issue #8) or home-improvement project (issue
