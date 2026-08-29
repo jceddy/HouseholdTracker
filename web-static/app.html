@@ -125,9 +125,14 @@
                 <label>Description
                     <textarea id="household-task-description" name="description" maxlength="2000"></textarea>
                 </label>
-                <label>Assign to
-                    <select id="household-task-assignee" name="assigned_to_user_id">
-                        <option value="">Unassigned</option>
+                <fieldset class="checkbox-fieldset">
+                    <legend>Assign to</legend>
+                    <div id="household-task-assignees"></div>
+                </fieldset>
+                <label>If assigned to more than one person
+                    <select id="household-task-mode" name="assignment_mode">
+                        <option value="anyone">Anyone completes it for all</option>
+                        <option value="everyone">Everyone completes their own</option>
                     </select>
                 </label>
                 <label>Repeats

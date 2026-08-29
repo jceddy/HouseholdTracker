@@ -11,15 +11,20 @@ use HouseholdTracker\Database\Connection;
  * household_task_instances' own migration comment
  * (database/migrations/0009_add_household_task_instances.sql) for why this
  * exists as its own table rather than a single mutable pointer on
- * household_tasks.
+ * household_tasks. `assigned_to_user_id` here (migration `0010`) is only
+ * set for an 'everyone'-mode task's own per-assignee copy of an occurrence
+ * -- NULL for a shared ('anyone'-mode, or 0/1-assignee) instance. See
+ * TaskService's docblock for the full anyone/everyone design.
  */
 final class HouseholdTaskInstanceRepository
 {
-    public function create(int $taskId, string $dueAt): array
+    public function create(int $taskId, string $dueAt, ?int $assignedToUserId = null): array
     {
         $pdo = Connection::get();
-        $stmt = $pdo->prepare('INSERT INTO household_task_instances (task_id, due_at) VALUES (:task_id, :due_at)');
-        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt]);
+        $stmt = $pdo->prepare(
+            'INSERT INTO household_task_instances (task_id, due_at, assigned_to_user_id) VALUES (:task_id, :due_at, :assigned_to_user_id)'
+        );
+        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId]);
 
         return $this->findById((int) $pdo->lastInsertId());
     }
@@ -35,20 +40,23 @@ final class HouseholdTaskInstanceRepository
 
     /**
      * findByIdWithTaskInfo(...) - the single-row shape returned from
-     * create/update/complete -- the instance's own fields plus its parent
+     * create/update/complete -- the instance's own fields (including which
+     * specific assignee's copy this is, if any) plus its parent
      * definition's, the way listForHousehold()/listAssignedToUser() already
-     * return each row (see their own docblocks).
+     * return each row (see their own docblocks). Doesn't include the full
+     * assignee list -- TaskService attaches that itself, the same bulk way
+     * the list methods do, since it needs the same lookup either way.
      */
     public function findByIdWithTaskInfo(int $id): ?array
     {
         $stmt = Connection::get()->prepare(
             'SELECT household_task_instances.*, household_tasks.household_id, household_tasks.title,
-                    household_tasks.description, household_tasks.assigned_to_user_id,
+                    household_tasks.description, household_tasks.assignment_mode,
                     household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
-                    users.username AS assigned_to_username
+                    assignee.username AS assigned_to_username
              FROM household_task_instances
              INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
-             LEFT JOIN users ON users.id = household_tasks.assigned_to_user_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
              WHERE household_task_instances.id = :id'
         );
         $stmt->execute(['id' => $id]);
@@ -68,12 +76,28 @@ final class HouseholdTaskInstanceRepository
         return $row === false ? null : $row;
     }
 
-    public function existsForTaskAndDate(int $taskId, string $dueAt): bool
+    public function countForTask(int $taskId): int
+    {
+        $stmt = Connection::get()->prepare('SELECT COUNT(*) AS total FROM household_task_instances WHERE task_id = :task_id');
+        $stmt->execute(['task_id' => $taskId]);
+
+        return (int) $stmt->fetch()['total'];
+    }
+
+    /**
+     * existsForTaskAndDate(...) - $assignedToUserId is compared with
+     * MySQL/MariaDB's NULL-safe `<=>` operator (plain `=` never matches
+     * NULL against NULL), since a shared ('anyone'-mode) instance's
+     * assigned_to_user_id is itself NULL.
+     */
+    public function existsForTaskAndDate(int $taskId, string $dueAt, ?int $assignedToUserId): bool
     {
         $stmt = Connection::get()->prepare(
-            'SELECT 1 FROM household_task_instances WHERE task_id = :task_id AND due_at = :due_at LIMIT 1'
+            'SELECT 1 FROM household_task_instances
+             WHERE task_id = :task_id AND due_at = :due_at AND assigned_to_user_id <=> :assigned_to_user_id
+             LIMIT 1'
         );
-        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt]);
+        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId]);
 
         return $stmt->fetch() !== false;
     }
@@ -104,25 +128,26 @@ final class HouseholdTaskInstanceRepository
      * listForHousehold(...) - only *pending* instances (the actionable
      * backlog -- a fallen-behind recurring task shows as several
      * individually-completable rows, not one perpetually-overdue one),
-     * each carrying its parent definition's fields plus a completion-history
-     * summary (count + most recent date) computed from that task's *other*,
-     * done instances -- via correlated subqueries rather than a join, since
-     * the main result set is filtered to pending while the summary needs to
-     * see done ones too.
+     * each carrying its parent definition's fields, which specific
+     * assignee's copy this row is (if 'everyone' mode), and a
+     * completion-history summary (count + most recent date) computed from
+     * that task's *other*, done instances -- via correlated subqueries
+     * rather than a join, since the main result set is filtered to pending
+     * while the summary needs to see done ones too.
      */
     public function listForHousehold(int $householdId): array
     {
         $stmt = Connection::get()->prepare(
             "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
-                    household_tasks.assigned_to_user_id, household_tasks.recurrence_frequency,
-                    household_tasks.recurrence_interval, users.username AS assigned_to_username,
+                    household_tasks.assignment_mode, household_tasks.recurrence_frequency,
+                    household_tasks.recurrence_interval, assignee.username AS assigned_to_username,
                     (SELECT COUNT(*) FROM household_task_instances completed
                         WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
                     (SELECT MAX(completed.completed_at) FROM household_task_instances completed
                         WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS last_completed_at
              FROM household_task_instances
              INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
-             LEFT JOIN users ON users.id = household_tasks.assigned_to_user_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
              WHERE household_tasks.household_id = :household_id AND household_task_instances.status = 'pending'
              ORDER BY household_task_instances.due_at ASC, household_task_instances.created_at DESC"
         );
@@ -132,18 +157,20 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
-     * listAssignedToUser(...) - the "My Tasks" view's pending instances
-     * across every household the user belongs to. Same household_members
-     * join guard as before the instances split, for the same reason: a
-     * stale assignment shouldn't keep surfacing here after the assignee has
-     * since left that household.
+     * listAssignedToUser(...) - the "My Tasks" view: every pending instance
+     * that is *this user's own to act on* across every household they
+     * belong to -- either a shared 'anyone'-mode instance for a task they're
+     * one of the assignees on, or their own personal 'everyone'-mode copy.
+     * Same household_members join guard as before the multi-assignee
+     * follow-up, for the same reason: a stale assignment shouldn't keep
+     * surfacing here after the assignee has since left that household.
      */
     public function listAssignedToUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
             "SELECT household_task_instances.*, household_tasks.household_id, households.name AS household_name,
-                    household_tasks.title, household_tasks.description, household_tasks.recurrence_frequency,
-                    household_tasks.recurrence_interval,
+                    household_tasks.title, household_tasks.description, household_tasks.assignment_mode,
+                    household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
                     (SELECT COUNT(*) FROM household_task_instances completed
                         WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
                     (SELECT MAX(completed.completed_at) FROM household_task_instances completed
@@ -151,13 +178,18 @@ final class HouseholdTaskInstanceRepository
              FROM household_task_instances
              INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
              INNER JOIN households ON households.id = household_tasks.household_id
+             INNER JOIN household_task_assignees
+                 ON household_task_assignees.task_id = household_tasks.id
+                AND household_task_assignees.user_id = :user_id_assignee
              INNER JOIN household_members
                  ON household_members.household_id = household_tasks.household_id
-                AND household_members.user_id = household_tasks.assigned_to_user_id
-             WHERE household_tasks.assigned_to_user_id = :user_id AND household_task_instances.status = 'pending'
+                AND household_members.user_id = household_task_assignees.user_id
+             WHERE household_task_instances.status = 'pending'
+               AND (household_task_instances.assigned_to_user_id IS NULL OR household_task_instances.assigned_to_user_id = :user_id_instance)
+             GROUP BY household_task_instances.id
              ORDER BY household_task_instances.due_at ASC, household_task_instances.created_at DESC"
         );
-        $stmt->execute(['user_id' => $userId]);
+        $stmt->execute(['user_id_assignee' => $userId, 'user_id_instance' => $userId]);
 
         return $stmt->fetchAll();
     }

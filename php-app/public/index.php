@@ -814,17 +814,18 @@ if ($path === '/households/tasks' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $task = $tasks->createTask(
+        $createdInstances = $tasks->createTask(
             (int) $currentUser['id'],
             (int) ($body['household_id'] ?? 0),
             (string) ($body['title'] ?? ''),
             isset($body['description']) ? (string) $body['description'] : null,
-            isset($body['assigned_to_user_id']) && $body['assigned_to_user_id'] !== '' ? (int) $body['assigned_to_user_id'] : null,
+            isset($body['assigned_to_user_ids']) && is_array($body['assigned_to_user_ids']) ? array_map('intval', $body['assigned_to_user_ids']) : [],
+            isset($body['assignment_mode']) && $body['assignment_mode'] !== '' ? (string) $body['assignment_mode'] : null,
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) ? (string) $body['due_at'] : null
         );
-        respond(201, ['status' => 'ok', 'task' => $task]);
+        respond(201, ['status' => 'ok', 'tasks' => $createdInstances]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
@@ -842,7 +843,8 @@ if ($path === '/households/tasks/update' && $method === 'POST') {
             (int) ($body['instance_id'] ?? 0),
             (string) ($body['title'] ?? ''),
             isset($body['description']) ? (string) $body['description'] : null,
-            isset($body['assigned_to_user_id']) && $body['assigned_to_user_id'] !== '' ? (int) $body['assigned_to_user_id'] : null,
+            isset($body['assigned_to_user_ids']) && is_array($body['assigned_to_user_ids']) ? array_map('intval', $body['assigned_to_user_ids']) : [],
+            isset($body['assignment_mode']) && $body['assignment_mode'] !== '' ? (string) $body['assignment_mode'] : null,
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) ? (string) $body['due_at'] : null

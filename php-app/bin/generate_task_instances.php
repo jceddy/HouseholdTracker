@@ -34,11 +34,17 @@ $horizon = $today->modify('+' . LOOKAHEAD_DAYS . ' days');
 $generated = 0;
 foreach ($tasks->listAllRecurring() as $task) {
     $latest = $instances->findLatestForTask((int) $task['id']);
-    // Every task gets its first instance synchronously at creation time
+    // Every task gets its first instance(s) synchronously at creation time
     // (TaskService::createTask()), so this should always find one -- but
     // fall back to the definition's own start_date rather than skip the
     // task outright if it somehow doesn't.
     $dueAt = new DateTimeImmutable((string) ($latest['due_at'] ?? $task['start_date']));
+
+    // 'anyone' mode (including 0/1 assignees) generates one shared instance
+    // per occurrence (assigned_to_user_id null); 'everyone' mode generates
+    // one per assignee, each their own copy to complete -- see
+    // TaskService's and HouseholdTaskInstanceRepository's own docblocks.
+    $assigneeIds = $task['assignment_mode'] === 'everyone' ? $tasks->listAssigneeIds((int) $task['id']) : [null];
 
     while (true) {
         $dueAt = RecurrenceCalculator::advance($dueAt, (string) $task['recurrence_frequency'], (int) $task['recurrence_interval']);
@@ -47,9 +53,11 @@ foreach ($tasks->listAllRecurring() as $task) {
         }
 
         $dueAtString = $dueAt->format('Y-m-d');
-        if (!$instances->existsForTaskAndDate((int) $task['id'], $dueAtString)) {
-            $instances->create((int) $task['id'], $dueAtString);
-            $generated++;
+        foreach ($assigneeIds as $assigneeId) {
+            if (!$instances->existsForTaskAndDate((int) $task['id'], $dueAtString, $assigneeId)) {
+                $instances->create((int) $task['id'], $dueAtString, $assigneeId);
+                $generated++;
+            }
         }
     }
 }

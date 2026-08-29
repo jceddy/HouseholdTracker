@@ -127,7 +127,17 @@ above remains the only way migrations reach the deployed database.
   backfills every existing task's *current* state (its individual
   historical completion events aren't individually replayed, only its
   latest one).
+- **Multiple task assignees** (`0010`, issue #12 follow-up): replaces
+  `household_tasks.assigned_to_user_id` (a single nullable column) with
+  `household_task_assignees`, a many-to-many join table, plus a new
+  `household_tasks.assignment_mode` (`'anyone'`/`'everyone'`) deciding what
+  2+ assignees means, and a matching `household_task_instances.
+  assigned_to_user_id` (null for a shared instance, or a specific
+  assignee's id for their own `'everyone'`-mode copy) — see "Multiple
+  assignees" in `php-app/README.md`'s "Task/chore tracking" section, and
+  the migration's own comment for the NULL-uniqueness tradeoff its unique
+  key accepts.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations starting at `0010`.
+their own numbered migrations starting at `0011`.

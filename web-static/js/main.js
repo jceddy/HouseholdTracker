@@ -179,7 +179,7 @@
 
         const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
         currentMembers = body.members;
-        populateAssigneeSelect(document.getElementById('household-task-assignee'));
+        populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
 
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
@@ -416,22 +416,30 @@
         li.appendChild(form);
     }
 
-    // populateAssigneeSelect(...) - fills an "assign to" <select> with the
-    // current household roster, preserving an "Unassigned" first option and
-    // optionally pre-selecting a given user id (for the edit form).
-    function populateAssigneeSelect(selectEl, selectedUserId) {
-        const unassignedOption = selectEl.options[0];
-        selectEl.innerHTML = '';
-        selectEl.appendChild(unassignedOption);
+    // populateAssigneeCheckboxes(...) - fills an "assign to" checkbox group
+    // with the current household roster, one checkbox per member, so a task
+    // can go to any number of them (see TaskService's multi-assignee
+    // docblock) -- pre-checking whichever ones are in selectedUserIds (for
+    // the edit form).
+    function populateAssigneeCheckboxes(containerEl, selectedUserIds) {
+        containerEl.innerHTML = '';
         for (const member of currentMembers) {
-            const option = document.createElement('option');
-            option.value = String(member.user_id);
-            option.textContent = member.username;
-            if (selectedUserId != null && member.user_id === selectedUserId) {
-                option.selected = true;
-            }
-            selectEl.appendChild(option);
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = String(member.user_id);
+            checkbox.checked = !!selectedUserIds && selectedUserIds.includes(member.user_id);
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(member.username));
+            containerEl.appendChild(label);
         }
+    }
+
+    // getCheckedAssigneeIds(...) - reads back a checkbox group built by
+    // populateAssigneeCheckboxes() as an array of user ids, for submitting.
+    function getCheckedAssigneeIds(containerEl) {
+        return Array.from(containerEl.querySelectorAll('input[type="checkbox"]:checked')).map((checkbox) => Number(checkbox.value));
     }
 
     const RECURRENCE_UNITS = { daily: 'day', weekly: 'week', monthly: 'month', annual: 'year' };
@@ -450,10 +458,34 @@
         return !!task.due_at && task.due_at < todayIso;
     }
 
+    // formatAssigneesBit(...) - shared by formatTaskLabel()/
+    // formatMyTaskLabel(): names the assignee(s), and, only when there's
+    // more than one (the only time it's not implied), whether completing
+    // this instance counts for all of them ('anyone') or just its own
+    // assignee ('everyone' -- task.assigned_to_username, if set, is *this
+    // instance's own* assignee out of the full list).
+    function formatAssigneesBit(task) {
+        const assignees = task.assignees || [];
+        if (assignees.length === 0) {
+            return null;
+        }
+
+        const names = assignees.map((assignee) => assignee.username).join(', ');
+        if (assignees.length === 1) {
+            return `assigned to ${names}`;
+        }
+
+        const modeText = task.assignment_mode === 'everyone'
+            ? `everyone completes their own${task.assigned_to_username ? ` — this one is ${task.assigned_to_username}'s` : ''}`
+            : 'anyone completes it for all';
+        return `assigned to ${names} (${modeText})`;
+    }
+
     function formatTaskLabel(task) {
         const bits = [task.title];
-        if (task.assigned_to_username) {
-            bits.push(`assigned to ${task.assigned_to_username}`);
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
         }
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
@@ -499,10 +531,16 @@
 
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
-    // belongs to instead of who it's assigned to (that's always "me" here,
-    // so redundant).
+    // belongs to. Still shows the assignee bit (unlike before the
+    // multi-assignee follow-up) since "me" is no longer necessarily the
+    // *only* assignee -- an 'anyone'-mode task shared with others is useful
+    // context here too.
     function formatMyTaskLabel(task) {
         const bits = [`${task.household_name}: ${task.title}`];
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
+        }
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
         }
@@ -575,16 +613,28 @@
         descriptionLabel.appendChild(descriptionTextarea);
         form.appendChild(descriptionLabel);
 
-        const assigneeLabel = document.createElement('label');
-        assigneeLabel.textContent = 'Assign to';
-        const assigneeSelect = document.createElement('select');
-        const unassignedOption = document.createElement('option');
-        unassignedOption.value = '';
-        unassignedOption.textContent = 'Unassigned';
-        assigneeSelect.appendChild(unassignedOption);
-        assigneeLabel.appendChild(assigneeSelect);
-        form.appendChild(assigneeLabel);
-        populateAssigneeSelect(assigneeSelect, task.assigned_to_user_id != null ? Number(task.assigned_to_user_id) : null);
+        const assigneeFieldset = document.createElement('fieldset');
+        assigneeFieldset.className = 'checkbox-fieldset';
+        const assigneeLegend = document.createElement('legend');
+        assigneeLegend.textContent = 'Assign to';
+        assigneeFieldset.appendChild(assigneeLegend);
+        const assigneesContainer = document.createElement('div');
+        assigneeFieldset.appendChild(assigneesContainer);
+        form.appendChild(assigneeFieldset);
+        populateAssigneeCheckboxes(assigneesContainer, (task.assignees || []).map((assignee) => assignee.id));
+
+        const modeLabel = document.createElement('label');
+        modeLabel.textContent = 'If assigned to more than one person';
+        const modeSelect = document.createElement('select');
+        for (const [value, text] of [['anyone', 'Anyone completes it for all'], ['everyone', 'Everyone completes their own']]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            modeSelect.appendChild(option);
+        }
+        modeSelect.value = task.assignment_mode || 'anyone';
+        modeLabel.appendChild(modeSelect);
+        form.appendChild(modeLabel);
 
         const frequencyLabel = document.createElement('label');
         frequencyLabel.textContent = 'Repeats';
@@ -654,7 +704,8 @@
                     instance_id: task.id,
                     title: titleInput.value,
                     description: descriptionTextarea.value,
-                    assigned_to_user_id: assigneeSelect.value,
+                    assigned_to_user_ids: getCheckedAssigneeIds(assigneesContainer),
+                    assignment_mode: modeSelect.value,
                     recurrence_frequency: frequencySelect.value,
                     recurrence_interval: frequencySelect.value ? intervalInput.value : '',
                     due_at: dueAtInput.value,
@@ -819,7 +870,8 @@
                 household_id: currentHouseholdId,
                 title: form.title.value,
                 description: form.description.value,
-                assigned_to_user_id: form.assigned_to_user_id.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-task-assignees')),
+                assignment_mode: form.assignment_mode.value,
                 recurrence_frequency: form.recurrence_frequency.value,
                 recurrence_interval: form.recurrence_frequency.value ? form.recurrence_interval.value : '',
                 due_at: form.due_at.value,
