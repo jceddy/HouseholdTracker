@@ -15,6 +15,9 @@ use HouseholdTracker\Database\Connection;
  * live in household_task_assignees, a many-to-many table, rather than a
  * single column here -- see this class's own assignee methods below, and
  * TaskService's docblock for what `assignment_mode` does with them.
+ * `priority` (issue #12's open-ended-task follow-up, migration `0011`) only
+ * meaningfully affects sort order for a one-off task with no due date --
+ * see HouseholdTaskInstanceRepository's list methods.
  */
 final class HouseholdTaskRepository
 {
@@ -24,6 +27,7 @@ final class HouseholdTaskRepository
         string $title,
         ?string $description,
         string $assignmentMode,
+        ?string $priority,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         string $startDate
@@ -31,15 +35,16 @@ final class HouseholdTaskRepository
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
             'INSERT INTO household_tasks
-                (household_id, title, description, assignment_mode, recurrence_frequency, recurrence_interval, start_date, created_by_user_id)
+                (household_id, title, description, assignment_mode, priority, recurrence_frequency, recurrence_interval, start_date, created_by_user_id)
              VALUES
-                (:household_id, :title, :description, :assignment_mode, :recurrence_frequency, :recurrence_interval, :start_date, :created_by_user_id)'
+                (:household_id, :title, :description, :assignment_mode, :priority, :recurrence_frequency, :recurrence_interval, :start_date, :created_by_user_id)'
         );
         $stmt->execute([
             'household_id' => $householdId,
             'title' => $title,
             'description' => $description,
             'assignment_mode' => $assignmentMode,
+            'priority' => $priority,
             'recurrence_frequency' => $recurrenceFrequency,
             'recurrence_interval' => $recurrenceInterval,
             'start_date' => $startDate,
@@ -73,12 +78,13 @@ final class HouseholdTaskRepository
         string $title,
         ?string $description,
         string $assignmentMode,
+        ?string $priority,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval
     ): void {
         $stmt = Connection::get()->prepare(
             'UPDATE household_tasks
-             SET title = :title, description = :description, assignment_mode = :assignment_mode,
+             SET title = :title, description = :description, assignment_mode = :assignment_mode, priority = :priority,
                  recurrence_frequency = :recurrence_frequency, recurrence_interval = :recurrence_interval
              WHERE id = :id'
         );
@@ -86,6 +92,7 @@ final class HouseholdTaskRepository
             'title' => $title,
             'description' => $description,
             'assignment_mode' => $assignmentMode,
+            'priority' => $priority,
             'recurrence_frequency' => $recurrenceFrequency,
             'recurrence_interval' => $recurrenceInterval,
             'id' => $id,

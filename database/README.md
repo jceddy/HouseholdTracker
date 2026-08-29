@@ -137,7 +137,14 @@ above remains the only way migrations reach the deployed database.
   assignees" in `php-app/README.md`'s "Task/chore tracking" section, and
   the migration's own comment for the NULL-uniqueness tradeoff its unique
   key accepts.
+- **Open-ended tasks** (`0011`, issue #12 follow-up): makes
+  `household_task_instances.due_at` nullable -- `null` means an open-ended
+  one-off task with no deadline, rather than every task needing a real
+  date -- and adds `household_tasks.priority`
+  (`'low'`/`'medium'`/`'high'`/`'critical'`, nullable), used to sort
+  open-ended tasks to the top of a list. See "Open-ended tasks" in
+  `php-app/README.md`'s "Task/chore tracking" section.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations starting at `0011`.
+their own numbered migrations starting at `0012`.

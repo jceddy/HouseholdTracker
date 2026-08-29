@@ -11,9 +11,13 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
 /**
  * Household task/chore tracking (issue #12): one-off tasks and recurring
  * chores (daily/weekly/monthly/annual, on an N-interval), assignable to any
- * number of household members. Tasks are a shared household resource, not
- * per-user content -- like pets (issue #7), any member may create/edit/
- * delete/complete any task, regardless of who created or is assigned it.
+ * number of household members, plus open-ended one-off tasks with no due
+ * date at all (issue #12's own follow-up, migration `0011`) -- see
+ * "Open-ended tasks" below. Tasks are a shared household resource, not
+ * per-user content, same permission model as pets: any member can create/
+ * edit/delete/complete any task, regardless of who created or is assigned
+ * it (in `"everyone"` mode this means, e.g., any member can complete a
+ * *different* assignee's own instance copy on their behalf).
  *
  * Reworked into a definition (HouseholdTaskRepository)+instances
  * (HouseholdTaskInstanceRepository) split by a follow-up to #12 -- see
@@ -30,16 +34,30 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  *   - 'anyone' (the default): one shared instance per occurrence -- whoever
  *     completes it first completes it for everyone assigned.
  *   - 'everyone': each assignee gets their own instance row for the same
- *     occurrence (see createTask()/HouseholdTaskInstanceRepository's own
- *     docblock) and must complete their own copy; the others are unaffected.
+ *     occurrence and must complete their own copy; the others are unaffected.
  * A task's assignee list is edited as a whole (replaceAssignees()), the
  * same way its other fields are -- there's no separate add/remove-one-
  * assignee endpoint.
+ *
+ * **Open-ended tasks** (#12's own follow-up, migration `0011`): a one-off
+ * task ("put the new latch on the back gate") doesn't always have a real
+ * deadline. Omitting `due_at` on a *one-off* task now leaves its instance's
+ * `due_at` NULL instead of defaulting to today -- a recurring task's
+ * occurrences still always need a real anchor date, so `due_at` still
+ * defaults to today there when omitted (see validateDueAt()). An
+ * open-ended task (one-off, `due_at` NULL) gets a `priority`
+ * ('low'/'medium'/'high'/'critical', defaulting to 'medium' if not given)
+ * so it can be triaged -- HouseholdTaskInstanceRepository's list methods
+ * sort every open-ended instance ahead of every dated one, highest
+ * priority first ("bubble to the top... in reverse-priority order"). A
+ * dated or recurring task can have a priority set too (not rejected), it
+ * just isn't used to reorder anything outside the no-deadline group.
  */
 final class TaskService
 {
     private const RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'monthly', 'annual'];
     private const ASSIGNMENT_MODES = ['anyone', 'everyone'];
+    private const PRIORITIES = ['low', 'medium', 'high', 'critical'];
     private const MAX_RECURRENCE_INTERVAL = 1000;
     private const MAX_NOTES_LENGTH = 2000;
 
@@ -87,16 +105,22 @@ final class TaskService
         ?string $assignmentMode,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
-        ?string $dueAt
+        ?string $dueAt,
+        ?string $priority
     ): array {
         $this->requireMember($householdId, $callerId);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
         $assignmentMode = $this->validateAssignmentMode($assignmentMode);
         $assignedToUserIds = $this->validateAssignees($householdId, $assignedToUserIds, $assignmentMode);
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
-        $dueAt = $this->validateDueAt($dueAt);
+        $dueAt = $this->validateDueAt($dueAt, $recurrenceFrequency !== null);
+        $priority = $this->validatePriority($priority, $recurrenceFrequency === null && $dueAt === null);
+        // start_date is NOT NULL on the definition even for an open-ended
+        // task (due_at NULL) -- see HouseholdTaskRepository's own docblock,
+        // its value is simply never read for a task cron doesn't process.
+        $startDate = $dueAt ?? (new \DateTimeImmutable('today'))->format('Y-m-d');
 
-        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignmentMode, $recurrenceFrequency, $recurrenceInterval, $dueAt);
+        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignmentMode, $priority, $recurrenceFrequency, $recurrenceInterval, $startDate);
         $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
 
         $instances = $assignmentMode === 'everyone'
@@ -111,9 +135,9 @@ final class TaskService
 
     /**
      * updateTask(...) - edits the parent definition's title/description/
-     * assignees/mode/recurrence, *and* moves this specific instance's own
-     * due date. Doesn't touch the definition's start_date (see
-     * HouseholdTaskRepository::update()'s own docblock) or any other
+     * assignees/mode/priority/recurrence, *and* moves this specific
+     * instance's own due date. Doesn't touch the definition's start_date
+     * (see HouseholdTaskRepository::update()'s own docblock) or any other
      * instance -- a recurring task's already-generated future occurrences
      * keep whatever dates cron gave them, and changing the assignee list
      * here doesn't retroactively create or delete instances for the
@@ -130,7 +154,8 @@ final class TaskService
         ?string $assignmentMode,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
-        ?string $dueAt
+        ?string $dueAt,
+        ?string $priority
     ): array {
         $instance = $this->requireMemberForInstance($callerId, $instanceId);
         $task = $this->tasks->findById((int) $instance['task_id']);
@@ -138,9 +163,10 @@ final class TaskService
         $assignmentMode = $this->validateAssignmentMode($assignmentMode);
         $assignedToUserIds = $this->validateAssignees((int) $task['household_id'], $assignedToUserIds, $assignmentMode);
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
-        $dueAt = $this->validateDueAt($dueAt);
+        $dueAt = $this->validateDueAt($dueAt, $recurrenceFrequency !== null);
+        $priority = $this->validatePriority($priority, $recurrenceFrequency === null && $dueAt === null);
 
-        $this->tasks->update((int) $task['id'], $title, $description, $assignmentMode, $recurrenceFrequency, $recurrenceInterval);
+        $this->tasks->update((int) $task['id'], $title, $description, $assignmentMode, $priority, $recurrenceFrequency, $recurrenceInterval);
         $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
         $this->instances->updateDueAt($instanceId, $dueAt);
 
@@ -275,17 +301,18 @@ final class TaskService
     }
 
     /**
-     * validateDueAt(...) - defaults to today when omitted, for a one-off
-     * task or a recurring one alike (a recurring task's due_at here is
-     * still just the *anchor* -- its literal due date is required now that
-     * every task, recurring or not, always has at least one concrete
-     * instance).
+     * validateDueAt(...) - a recurring task always needs a real anchor date
+     * (defaults to today if omitted, same as before the open-ended-task
+     * follow-up); a one-off task left blank is now genuinely open-ended --
+     * returns null rather than defaulting to today, so it's *never* due
+     * (see the class's own "Open-ended tasks" docblock section) instead of
+     * silently becoming "due today".
      */
-    private function validateDueAt(?string $dueAt): string
+    private function validateDueAt(?string $dueAt, bool $isRecurring): ?string
     {
         $dueAt = $dueAt !== null ? trim($dueAt) : '';
         if ($dueAt === '') {
-            return (new \DateTimeImmutable('today'))->format('Y-m-d');
+            return $isRecurring ? (new \DateTimeImmutable('today'))->format('Y-m-d') : null;
         }
 
         $date = \DateTime::createFromFormat('Y-m-d', $dueAt);
@@ -294,6 +321,24 @@ final class TaskService
         }
 
         return $dueAt;
+    }
+
+    /**
+     * validatePriority(...) - defaults to 'medium' only for a genuinely
+     * open-ended task (one-off, no due date) that didn't specify one, so
+     * every task that actually needs a priority for sorting purposes has
+     * one; a dated or recurring task's priority, if any, is left exactly as
+     * given (including null) since it isn't used to reorder anything.
+     */
+    private function validatePriority(?string $priority, bool $isOpenEnded): ?string
+    {
+        $priority = $priority !== null && $priority !== '' ? $priority : null;
+
+        if ($priority !== null && !in_array($priority, self::PRIORITIES, true)) {
+            throw new \InvalidArgumentException('priority must be one of: ' . implode(', ', self::PRIORITIES) . '.');
+        }
+
+        return $priority ?? ($isOpenEnded ? 'medium' : null);
     }
 
     /**

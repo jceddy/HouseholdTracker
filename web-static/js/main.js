@@ -481,6 +481,27 @@
         return `assigned to ${names} (${modeText})`;
     }
 
+    // isOpenEnded(...) - a one-off task with no due date at all (issue #12's
+    // open-ended-task follow-up) -- distinct from a dated one-off, which
+    // still has a due_at like any recurring occurrence does.
+    function isOpenEnded(task) {
+        return !task.recurrence_frequency && !task.due_at;
+    }
+
+    // formatDueAtBit(...) - shared by formatTaskLabel()/formatMyTaskLabel():
+    // a due date (or OVERDUE marker) for a dated task, or its priority for
+    // an open-ended one -- the two are mutually exclusive, since an
+    // open-ended task is defined by having no due_at.
+    function formatDueAtBit(task) {
+        if (task.due_at) {
+            return isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`;
+        }
+        if (isOpenEnded(task) && task.priority) {
+            return `${task.priority} priority, no deadline`;
+        }
+        return null;
+    }
+
     function formatTaskLabel(task) {
         const bits = [task.title];
         const assigneesBit = formatAssigneesBit(task);
@@ -490,8 +511,9 @@
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
         }
-        if (task.due_at) {
-            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`);
+        const dueAtBit = formatDueAtBit(task);
+        if (dueAtBit) {
+            bits.push(dueAtBit);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -544,8 +566,9 @@
         if (task.recurrence_frequency) {
             bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
         }
-        if (task.due_at) {
-            bits.push(isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`);
+        const dueAtBit = formatDueAtBit(task);
+        if (dueAtBit) {
+            bits.push(dueAtBit);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -553,23 +576,32 @@
         return bits.join(' — ');
     }
 
-    async function loadMyTasks() {
-        const { response, body } = await apiRequest('/tasks/mine');
+    // myTasksCache/renderMyTasks() - the "Show open-ended tasks" checkbox
+    // just re-renders from the last-fetched list instead of re-fetching, so
+    // toggling it is instant and never fights with a concurrent complete.
+    // The server already does the actual sorting (open-ended tasks bubble
+    // to the top, highest priority first -- see
+    // HouseholdTaskInstanceRepository::listAssignedToUser()); this only
+    // ever hides/shows rows, never reorders them.
+    let myTasksCache = [];
+
+    function renderMyTasks() {
         const list = document.getElementById('my-tasks-list');
         list.innerHTML = '';
 
-        if (!response.ok) {
-            return;
-        }
+        const showOpenEnded = document.getElementById('my-tasks-show-open-ended').checked;
+        const tasks = showOpenEnded ? myTasksCache : myTasksCache.filter((task) => !isOpenEnded(task));
 
-        if (body.tasks.length === 0) {
+        if (tasks.length === 0) {
             const li = document.createElement('li');
-            li.textContent = 'Nothing assigned to you right now.';
+            li.textContent = myTasksCache.length === 0
+                ? 'Nothing assigned to you right now.'
+                : 'No tasks match the current filter.';
             list.appendChild(li);
             return;
         }
 
-        for (const task of body.tasks) {
+        for (const task of tasks) {
             const { li, actions } = buildListItem(formatMyTaskLabel(task));
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
@@ -580,6 +612,12 @@
             }));
             list.appendChild(li);
         }
+    }
+
+    async function loadMyTasks() {
+        const { response, body } = await apiRequest('/tasks/mine');
+        myTasksCache = response.ok ? body.tasks : [];
+        renderMyTasks();
     }
 
     // renderTaskEditForm(...) - same inline-edit pattern as
@@ -664,12 +702,25 @@
         form.appendChild(intervalLabel);
 
         const dueAtLabel = document.createElement('label');
-        dueAtLabel.textContent = 'Due date';
+        dueAtLabel.textContent = 'Due date (leave blank for an open-ended task with no deadline)';
         const dueAtInput = document.createElement('input');
         dueAtInput.type = 'date';
         dueAtInput.value = task.due_at || '';
         dueAtLabel.appendChild(dueAtInput);
         form.appendChild(dueAtLabel);
+
+        const priorityLabel = document.createElement('label');
+        priorityLabel.textContent = 'Priority (used to sort open-ended tasks)';
+        const prioritySelect = document.createElement('select');
+        for (const [value, text] of [['', 'None'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['critical', 'Critical']]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            prioritySelect.appendChild(option);
+        }
+        prioritySelect.value = task.priority || '';
+        priorityLabel.appendChild(prioritySelect);
+        form.appendChild(priorityLabel);
 
         frequencySelect.addEventListener('change', () => {
             intervalLabel.hidden = !frequencySelect.value;
@@ -709,6 +760,7 @@
                     recurrence_frequency: frequencySelect.value,
                     recurrence_interval: frequencySelect.value ? intervalInput.value : '',
                     due_at: dueAtInput.value,
+                    priority: prioritySelect.value,
                 }),
             });
 
@@ -730,6 +782,8 @@
         document.getElementById('household-task-interval-row').hidden = !frequency;
         document.getElementById('household-task-interval-unit').textContent = RECURRENCE_UNITS[frequency] ? `${RECURRENCE_UNITS[frequency]}(s)` : 'day(s)';
     });
+
+    document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });
@@ -875,6 +929,7 @@
                 recurrence_frequency: form.recurrence_frequency.value,
                 recurrence_interval: form.recurrence_frequency.value ? form.recurrence_interval.value : '',
                 due_at: form.due_at.value,
+                priority: form.priority.value,
             }),
         });
 

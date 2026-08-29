@@ -150,8 +150,17 @@
                         <span id="household-task-interval-unit">day(s)</span>
                     </span>
                 </label>
-                <label>Due date
+                <label>Due date (leave blank for an open-ended task with no deadline)
                     <input type="date" id="household-task-due-at" name="due_at">
+                </label>
+                <label>Priority (used to sort open-ended tasks)
+                    <select id="household-task-priority" name="priority">
+                        <option value="">None</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
                 </label>
                 <button type="submit">Add task</button>
                 <p id="household-task-message" class="message" hidden></p>
@@ -163,6 +172,10 @@
     </div>
 
     <div class="top-tab-panel" id="top-tab-panel-my-tasks" role="tabpanel" hidden>
+        <label class="checkbox-label">
+            <input type="checkbox" id="my-tasks-show-open-ended" checked>
+            Show open-ended tasks
+        </label>
         <ul id="my-tasks-list"></ul>
     </div>
 
