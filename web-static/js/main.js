@@ -1,5 +1,6 @@
 (async function () {
     let currentHouseholdId = null;
+    let currentMembers = [];
 
     const user = await getCurrentUser();
     if (!user) {
@@ -40,6 +41,9 @@
         + '<polyline points="3 6 5 6 21 6"></polyline>'
         + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>'
         + '<line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
+    const CHECK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+        + '<polyline points="20 6 9 17 4 12"></polyline></svg>';
 
     // buildIconButton(...) - same idea as buildButton(), but shows an icon
     // instead of text; the text is still there for screen readers via
@@ -107,6 +111,47 @@
         }
     }
 
+    // activateTab(...) - the household detail view's Members/Settings/Notes/
+    // Pets/Tasks sections are tab panels rather than stacked vertically;
+    // this shows the chosen one and hides the rest, keyed off each tab
+    // button's own data-tab attribute matching a "tab-panel-<name>" panel id.
+    function activateTab(tabName) {
+        for (const button of document.querySelectorAll('.tab-button')) {
+            button.setAttribute('aria-selected', String(button.dataset.tab === tabName));
+        }
+        for (const panel of document.querySelectorAll('.tab-panel')) {
+            panel.hidden = panel.id !== `tab-panel-${tabName}`;
+        }
+    }
+
+    for (const button of document.querySelectorAll('.tab-button')) {
+        button.addEventListener('click', () => activateTab(button.dataset.tab));
+    }
+
+    // activateTopTab(...) - same idea as activateTab(), one level up: the
+    // landing page's Households/My Tasks sections are top-level tab panels.
+    // Kept as a separate function/class pair (top-tab-button/top-tab-panel)
+    // rather than sharing activateTab()'s selectors, so switching one tab
+    // group never touches the other's aria-selected/hidden state.
+    function activateTopTab(tabName) {
+        for (const button of document.querySelectorAll('.top-tab-button')) {
+            button.setAttribute('aria-selected', String(button.dataset.topTab === tabName));
+        }
+        for (const panel of document.querySelectorAll('.top-tab-panel')) {
+            panel.hidden = panel.id !== `top-tab-panel-${tabName}`;
+        }
+    }
+
+    for (const button of document.querySelectorAll('.top-tab-button')) {
+        button.addEventListener('click', () => activateTopTab(button.dataset.topTab));
+    }
+
+    // Re-fetch My Tasks every time it's navigated to, rather than only once
+    // at page load -- a task added/completed elsewhere (or by someone else)
+    // since the last load otherwise wouldn't show up here without a manual
+    // page refresh.
+    document.querySelector('.top-tab-button[data-top-tab="my-tasks"]').addEventListener('click', () => loadMyTasks());
+
     async function openHouseholdDetail(householdId, householdName) {
         currentHouseholdId = householdId;
         document.getElementById('household-detail-name').textContent = householdName;
@@ -116,9 +161,11 @@
         // detail panel, it was easy to mistake for part of it and got in the
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
+        activateTab('members');
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
+        await loadTasks(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -137,6 +184,8 @@
         }
 
         const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
+        currentMembers = body.members;
+        populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
 
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
@@ -373,6 +422,376 @@
         li.appendChild(form);
     }
 
+    // populateAssigneeCheckboxes(...) - fills an "assign to" checkbox group
+    // with the current household roster, one checkbox per member, so a task
+    // can go to any number of them (see TaskService's multi-assignee
+    // docblock) -- pre-checking whichever ones are in selectedUserIds (for
+    // the edit form).
+    function populateAssigneeCheckboxes(containerEl, selectedUserIds) {
+        containerEl.innerHTML = '';
+        for (const member of currentMembers) {
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = String(member.user_id);
+            checkbox.checked = !!selectedUserIds && selectedUserIds.includes(member.user_id);
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(member.username));
+            containerEl.appendChild(label);
+        }
+    }
+
+    // getCheckedAssigneeIds(...) - reads back a checkbox group built by
+    // populateAssigneeCheckboxes() as an array of user ids, for submitting.
+    function getCheckedAssigneeIds(containerEl) {
+        return Array.from(containerEl.querySelectorAll('input[type="checkbox"]:checked')).map((checkbox) => Number(checkbox.value));
+    }
+
+    const RECURRENCE_UNITS = { daily: 'day', weekly: 'week', monthly: 'month', annual: 'year' };
+
+    function describeRecurrence(frequency, interval) {
+        const unit = RECURRENCE_UNITS[frequency] || frequency;
+        return interval === 1 ? `every ${unit}` : `every ${interval} ${unit}s`;
+    }
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    // isTaskOverdue(...) - the list only ever contains *pending* instances
+    // (see loadTasks()/loadMyTasks()'s own routes), so there's no status
+    // check needed here anymore -- just whether its due date has passed.
+    function isTaskOverdue(task) {
+        return !!task.due_at && task.due_at < todayIso;
+    }
+
+    // formatAssigneesBit(...) - shared by formatTaskLabel()/
+    // formatMyTaskLabel(): names the assignee(s), and, only when there's
+    // more than one (the only time it's not implied), whether completing
+    // this instance counts for all of them ('anyone') or just its own
+    // assignee ('everyone' -- task.assigned_to_username, if set, is *this
+    // instance's own* assignee out of the full list).
+    function formatAssigneesBit(task) {
+        const assignees = task.assignees || [];
+        if (assignees.length === 0) {
+            return null;
+        }
+
+        const names = assignees.map((assignee) => assignee.username).join(', ');
+        if (assignees.length === 1) {
+            return `assigned to ${names}`;
+        }
+
+        const modeText = task.assignment_mode === 'everyone'
+            ? `everyone completes their own${task.assigned_to_username ? ` — this one is ${task.assigned_to_username}'s` : ''}`
+            : 'anyone completes it for all';
+        return `assigned to ${names} (${modeText})`;
+    }
+
+    // isOpenEnded(...) - a one-off task with no due date at all (issue #12's
+    // open-ended-task follow-up) -- distinct from a dated one-off, which
+    // still has a due_at like any recurring occurrence does.
+    function isOpenEnded(task) {
+        return !task.recurrence_frequency && !task.due_at;
+    }
+
+    // formatDueAtBit(...) - shared by formatTaskLabel()/formatMyTaskLabel():
+    // a due date (or OVERDUE marker) for a dated task, or its priority for
+    // an open-ended one -- the two are mutually exclusive, since an
+    // open-ended task is defined by having no due_at.
+    function formatDueAtBit(task) {
+        if (task.due_at) {
+            return isTaskOverdue(task) ? `OVERDUE (was due ${task.due_at})` : `due ${task.due_at}`;
+        }
+        if (isOpenEnded(task) && task.priority) {
+            return `${task.priority} priority, no deadline`;
+        }
+        return null;
+    }
+
+    function formatTaskLabel(task) {
+        const bits = [task.title];
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
+        }
+        if (task.recurrence_frequency) {
+            bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
+        }
+        const dueAtBit = formatDueAtBit(task);
+        if (dueAtBit) {
+            bits.push(dueAtBit);
+        }
+        if (Number(task.completion_count) > 0) {
+            bits.push(`completed ${task.completion_count}x`);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadTasks(householdId) {
+        const { response, body } = await apiRequest('/households/tasks?household_id=' + householdId);
+        const list = document.getElementById('household-tasks-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const task of body.tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadTasks(householdId);
+            }));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/tasks/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadTasks(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
+    // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
+    // household "My Tasks" view: leads with which household the task
+    // belongs to. Still shows the assignee bit (unlike before the
+    // multi-assignee follow-up) since "me" is no longer necessarily the
+    // *only* assignee -- an 'anyone'-mode task shared with others is useful
+    // context here too.
+    function formatMyTaskLabel(task) {
+        const bits = [`${task.household_name}: ${task.title}`];
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
+        }
+        if (task.recurrence_frequency) {
+            bits.push(describeRecurrence(task.recurrence_frequency, Number(task.recurrence_interval)));
+        }
+        const dueAtBit = formatDueAtBit(task);
+        if (dueAtBit) {
+            bits.push(dueAtBit);
+        }
+        if (Number(task.completion_count) > 0) {
+            bits.push(`completed ${task.completion_count}x`);
+        }
+        return bits.join(' — ');
+    }
+
+    // myTasksCache/renderMyTasks() - the "Show open-ended tasks" checkbox
+    // just re-renders from the last-fetched list instead of re-fetching, so
+    // toggling it is instant and never fights with a concurrent complete.
+    // The server already does the actual sorting (open-ended tasks bubble
+    // to the top, highest priority first -- see
+    // HouseholdTaskInstanceRepository::listAssignedToUser()); this only
+    // ever hides/shows rows, never reorders them.
+    let myTasksCache = [];
+
+    function renderMyTasks() {
+        const list = document.getElementById('my-tasks-list');
+        list.innerHTML = '';
+
+        const showOpenEnded = document.getElementById('my-tasks-show-open-ended').checked;
+        const tasks = showOpenEnded ? myTasksCache : myTasksCache.filter((task) => !isOpenEnded(task));
+
+        if (tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = myTasksCache.length === 0
+                ? 'Nothing assigned to you right now.'
+                : 'No tasks match the current filter.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of tasks) {
+            const { li, actions } = buildListItem(formatMyTaskLabel(task));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadMyTasks();
+            }));
+            list.appendChild(li);
+        }
+    }
+
+    async function loadMyTasks() {
+        const { response, body } = await apiRequest('/tasks/mine');
+        myTasksCache = response.ok ? body.tasks : [];
+        renderMyTasks();
+    }
+
+    // renderTaskEditForm(...) - same inline-edit pattern as
+    // renderNoteEditForm()/renderPetEditForm(); any household member may
+    // edit any task (a shared resource, like pets). Editing updates both
+    // the underlying recurring/one-off definition (title/description/
+    // assignee/recurrence) and this specific instance's own due date --
+    // see TaskService::updateTask()'s own docblock for why moving the due
+    // date only affects the instance being edited, not the whole series.
+    function renderTaskEditForm(li, task, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const titleLabel = document.createElement('label');
+        titleLabel.textContent = 'Title';
+        const titleInput = document.createElement('input');
+        titleInput.type = 'text';
+        titleInput.value = task.title;
+        titleInput.maxLength = 150;
+        titleInput.required = true;
+        titleLabel.appendChild(titleInput);
+        form.appendChild(titleLabel);
+
+        const descriptionLabel = document.createElement('label');
+        descriptionLabel.textContent = 'Description';
+        const descriptionTextarea = document.createElement('textarea');
+        descriptionTextarea.value = task.description || '';
+        descriptionTextarea.maxLength = 2000;
+        descriptionLabel.appendChild(descriptionTextarea);
+        form.appendChild(descriptionLabel);
+
+        const assigneeFieldset = document.createElement('fieldset');
+        assigneeFieldset.className = 'checkbox-fieldset';
+        const assigneeLegend = document.createElement('legend');
+        assigneeLegend.textContent = 'Assign to';
+        assigneeFieldset.appendChild(assigneeLegend);
+        const assigneesContainer = document.createElement('div');
+        assigneeFieldset.appendChild(assigneesContainer);
+        form.appendChild(assigneeFieldset);
+        populateAssigneeCheckboxes(assigneesContainer, (task.assignees || []).map((assignee) => assignee.id));
+
+        const modeLabel = document.createElement('label');
+        modeLabel.textContent = 'If assigned to more than one person';
+        const modeSelect = document.createElement('select');
+        for (const [value, text] of [['anyone', 'Anyone completes it for all'], ['everyone', 'Everyone completes their own']]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            modeSelect.appendChild(option);
+        }
+        modeSelect.value = task.assignment_mode || 'anyone';
+        modeLabel.appendChild(modeSelect);
+        form.appendChild(modeLabel);
+
+        const frequencyLabel = document.createElement('label');
+        frequencyLabel.textContent = 'Repeats';
+        const frequencySelect = document.createElement('select');
+        for (const [value, text] of [['', 'One-off (no repeat)'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['annual', 'Annual']]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            frequencySelect.appendChild(option);
+        }
+        frequencySelect.value = task.recurrence_frequency || '';
+        frequencyLabel.appendChild(frequencySelect);
+        form.appendChild(frequencyLabel);
+
+        const intervalLabel = document.createElement('label');
+        intervalLabel.textContent = 'Every';
+        const intervalInput = document.createElement('input');
+        intervalInput.type = 'number';
+        intervalInput.min = '1';
+        intervalInput.max = '1000';
+        intervalInput.value = String(task.recurrence_interval || 1);
+        intervalLabel.appendChild(intervalInput);
+        const intervalUnit = document.createElement('span');
+        intervalUnit.textContent = RECURRENCE_UNITS[frequencySelect.value] ? `${RECURRENCE_UNITS[frequencySelect.value]}(s)` : '';
+        intervalLabel.appendChild(intervalUnit);
+        intervalLabel.hidden = !frequencySelect.value;
+        form.appendChild(intervalLabel);
+
+        const dueAtLabel = document.createElement('label');
+        dueAtLabel.textContent = 'Due date (leave blank for an open-ended task with no deadline)';
+        const dueAtInput = document.createElement('input');
+        dueAtInput.type = 'date';
+        dueAtInput.value = task.due_at || '';
+        dueAtLabel.appendChild(dueAtInput);
+        form.appendChild(dueAtLabel);
+
+        const priorityLabel = document.createElement('label');
+        priorityLabel.textContent = 'Priority (used to sort open-ended tasks)';
+        const prioritySelect = document.createElement('select');
+        for (const [value, text] of [['', 'None'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['critical', 'Critical']]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            prioritySelect.appendChild(option);
+        }
+        prioritySelect.value = task.priority || '';
+        priorityLabel.appendChild(prioritySelect);
+        form.appendChild(priorityLabel);
+
+        frequencySelect.addEventListener('change', () => {
+            intervalLabel.hidden = !frequencySelect.value;
+            intervalUnit.textContent = RECURRENCE_UNITS[frequencySelect.value] ? `${RECURRENCE_UNITS[frequencySelect.value]}(s)` : '';
+        });
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadTasks(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/tasks/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    instance_id: task.id,
+                    title: titleInput.value,
+                    description: descriptionTextarea.value,
+                    assigned_to_user_ids: getCheckedAssigneeIds(assigneesContainer),
+                    assignment_mode: modeSelect.value,
+                    recurrence_frequency: frequencySelect.value,
+                    recurrence_interval: frequencySelect.value ? intervalInput.value : '',
+                    due_at: dueAtInput.value,
+                    priority: prioritySelect.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadTasks(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save task.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
+    document.getElementById('household-task-frequency').addEventListener('change', (event) => {
+        const frequency = event.target.value;
+        document.getElementById('household-task-interval-row').hidden = !frequency;
+        document.getElementById('household-task-interval-unit').textContent = RECURRENCE_UNITS[frequency] ? `${RECURRENCE_UNITS[frequency]}(s)` : 'day(s)';
+    });
+
+    document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
+    document.getElementById('my-tasks-refresh-button').addEventListener('click', () => loadMyTasks());
+
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });
         window.location.href = '/';
@@ -500,8 +919,42 @@
         messageEl.hidden = false;
     });
 
+    document.getElementById('household-task-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-task-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                description: form.description.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-task-assignees')),
+                assignment_mode: form.assignment_mode.value,
+                recurrence_frequency: form.recurrence_frequency.value,
+                recurrence_interval: form.recurrence_frequency.value ? form.recurrence_interval.value : '',
+                due_at: form.due_at.value,
+                priority: form.priority.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            document.getElementById('household-task-interval-row').hidden = true;
+            await loadTasks(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add task.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
     document.getElementById('close-household-detail-button').addEventListener('click', closeHouseholdDetail);
 
     await loadInvites();
     await loadHouseholds();
+    await loadMyTasks();
 })();

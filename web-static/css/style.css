@@ -156,6 +156,43 @@ form {
     margin-top: 1rem;
 }
 
+.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 1.25rem;
+}
+
+button.tab-button,
+button.top-tab-button {
+    background: none;
+    color: var(--color-muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: 0.4rem 0.4rem 0 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+
+button.tab-button:hover,
+button.top-tab-button:hover {
+    color: var(--color-text);
+    background: var(--color-surface);
+}
+
+button.tab-button[aria-selected="true"],
+button.top-tab-button[aria-selected="true"] {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+.tab-panel,
+.top-tab-panel {
+    margin-bottom: 2rem;
+}
+
 label {
     font-size: 0.85rem;
     color: var(--color-muted);
@@ -170,15 +207,44 @@ label {
     gap: 0.75rem;
 }
 
-.form-row .checkbox-label {
+.checkbox-label {
     flex-direction: row;
     align-items: center;
     gap: 0.4rem;
 }
 
+fieldset.checkbox-fieldset {
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    padding: 0.6rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+fieldset.checkbox-fieldset legend {
+    font-size: 0.85rem;
+    color: var(--color-muted);
+    padding: 0 0.3rem;
+}
+
+fieldset.checkbox-fieldset .checkbox-label {
+    color: var(--color-text);
+}
+
 button.button--compact {
     padding: 0.4rem 0.8rem;
     font-size: 0.85rem;
+}
+
+.inline-number-unit {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.inline-number-unit input {
+    width: 5rem;
 }
 
 input {

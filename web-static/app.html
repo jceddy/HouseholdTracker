@@ -17,6 +17,12 @@
     <h1>HouseholdTracker</h1>
     <p>Logged in as <strong id="current-username"></strong>.</p>
 
+    <div class="tabs" role="tablist">
+        <button type="button" class="top-tab-button" data-top-tab="households" role="tab" aria-selected="true">Households</button>
+        <button type="button" class="top-tab-button" data-top-tab="my-tasks" role="tab" aria-selected="false">My Tasks</button>
+    </div>
+
+    <div class="top-tab-panel" id="top-tab-panel-households" role="tabpanel">
     <section id="invites-section" hidden>
         <h2>Pending invites</h2>
         <ul id="invites-list"></ul>
@@ -40,64 +46,141 @@
 
     <section id="household-detail-section" hidden>
         <h3 id="household-detail-name"></h3>
-        <ul id="household-members-list"></ul>
-        <form id="invite-form">
-            <label>Invite by username or email
-                <input type="text" id="invite-username-or-email" name="username_or_email" required>
-            </label>
-            <button type="submit">Send invite</button>
-            <p id="invite-message" class="message" hidden></p>
-        </form>
 
-        <h4>Settings</h4>
-        <form id="household-settings-form">
-            <label>Household name
-                <input type="text" id="household-settings-name" name="name" required maxlength="100">
-            </label>
-            <button type="submit">Save</button>
-            <p id="household-settings-message" class="message" hidden></p>
-        </form>
+        <div class="tabs" role="tablist">
+            <button type="button" class="tab-button" data-tab="members" role="tab" aria-selected="true">Members</button>
+            <button type="button" class="tab-button" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+            <button type="button" class="tab-button" data-tab="notes" role="tab" aria-selected="false">Notes</button>
+            <button type="button" class="tab-button" data-tab="pets" role="tab" aria-selected="false">Pets</button>
+            <button type="button" class="tab-button" data-tab="tasks" role="tab" aria-selected="false">Tasks</button>
+        </div>
 
-        <h4>Notes</h4>
-        <ul id="household-notes-list"></ul>
-        <form id="household-note-form">
-            <label>Note
-                <textarea id="household-note-body" name="body" required maxlength="20000"></textarea>
-            </label>
-            <div class="form-row">
-                <button type="submit" class="button--compact">Add note</button>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="household-note-private" name="private">
-                    Private
+        <div class="tab-panel" id="tab-panel-members" role="tabpanel">
+            <ul id="household-members-list"></ul>
+            <form id="invite-form">
+                <label>Invite by username or email
+                    <input type="text" id="invite-username-or-email" name="username_or_email" required>
                 </label>
-            </div>
-            <p id="household-note-message" class="message" hidden></p>
-        </form>
+                <button type="submit">Send invite</button>
+                <p id="invite-message" class="message" hidden></p>
+            </form>
+        </div>
 
-        <h4>Pets</h4>
-        <ul id="household-pets-list"></ul>
-        <form id="household-pet-form">
-            <label>Name
-                <input type="text" id="household-pet-name" name="name" required maxlength="100">
-            </label>
-            <label>Species
-                <input type="text" id="household-pet-species" name="species" maxlength="100">
-            </label>
-            <label>Breed
-                <input type="text" id="household-pet-breed" name="breed" maxlength="100">
-            </label>
-            <label>Birthday
-                <input type="date" id="household-pet-birthday" name="birthday">
-            </label>
-            <label>Notes
-                <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
-            </label>
-            <button type="submit">Add pet</button>
-            <p id="household-pet-message" class="message" hidden></p>
-        </form>
+        <div class="tab-panel" id="tab-panel-settings" role="tabpanel" hidden>
+            <form id="household-settings-form">
+                <label>Household name
+                    <input type="text" id="household-settings-name" name="name" required maxlength="100">
+                </label>
+                <button type="submit">Save</button>
+                <p id="household-settings-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-notes" role="tabpanel" hidden>
+            <ul id="household-notes-list"></ul>
+            <form id="household-note-form">
+                <label>Note
+                    <textarea id="household-note-body" name="body" required maxlength="20000"></textarea>
+                </label>
+                <div class="form-row">
+                    <button type="submit" class="button--compact">Add note</button>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="household-note-private" name="private">
+                        Private
+                    </label>
+                </div>
+                <p id="household-note-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-pets" role="tabpanel" hidden>
+            <ul id="household-pets-list"></ul>
+            <form id="household-pet-form">
+                <label>Name
+                    <input type="text" id="household-pet-name" name="name" required maxlength="100">
+                </label>
+                <label>Species
+                    <input type="text" id="household-pet-species" name="species" maxlength="100">
+                </label>
+                <label>Breed
+                    <input type="text" id="household-pet-breed" name="breed" maxlength="100">
+                </label>
+                <label>Birthday
+                    <input type="date" id="household-pet-birthday" name="birthday">
+                </label>
+                <label>Notes
+                    <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <button type="submit">Add pet</button>
+                <p id="household-pet-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-tasks" role="tabpanel" hidden>
+            <ul id="household-tasks-list"></ul>
+            <form id="household-task-form">
+                <label>Title
+                    <input type="text" id="household-task-title" name="title" required maxlength="150">
+                </label>
+                <label>Description
+                    <textarea id="household-task-description" name="description" maxlength="2000"></textarea>
+                </label>
+                <fieldset class="checkbox-fieldset">
+                    <legend>Assign to</legend>
+                    <div id="household-task-assignees"></div>
+                </fieldset>
+                <label>If assigned to more than one person
+                    <select id="household-task-mode" name="assignment_mode">
+                        <option value="anyone">Anyone completes it for all</option>
+                        <option value="everyone">Everyone completes their own</option>
+                    </select>
+                </label>
+                <label>Repeats
+                    <select id="household-task-frequency" name="recurrence_frequency">
+                        <option value="">One-off (no repeat)</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="annual">Annual</option>
+                    </select>
+                </label>
+                <label id="household-task-interval-row" hidden>Every
+                    <span class="inline-number-unit">
+                        <input type="number" id="household-task-interval" name="recurrence_interval" min="1" max="1000" value="1">
+                        <span id="household-task-interval-unit">day(s)</span>
+                    </span>
+                </label>
+                <label>Due date (leave blank for an open-ended task with no deadline)
+                    <input type="date" id="household-task-due-at" name="due_at">
+                </label>
+                <label>Priority (used to sort open-ended tasks)
+                    <select id="household-task-priority" name="priority">
+                        <option value="">None</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </label>
+                <button type="submit">Add task</button>
+                <p id="household-task-message" class="message" hidden></p>
+            </form>
+        </div>
 
         <button id="close-household-detail-button" type="button">Close</button>
     </section>
+    </div>
+
+    <div class="top-tab-panel" id="top-tab-panel-my-tasks" role="tabpanel" hidden>
+        <div class="form-row">
+            <label class="checkbox-label">
+                <input type="checkbox" id="my-tasks-show-open-ended" checked>
+                Show open-ended tasks
+            </label>
+            <button type="button" id="my-tasks-refresh-button" class="button--compact">Refresh</button>
+        </div>
+        <ul id="my-tasks-list"></ul>
+    </div>
 
     <button id="logout-button" type="button">Log out</button>
 </main>
