@@ -140,15 +140,26 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
-     * listForHousehold(...) - only *pending* instances (the actionable
-     * backlog -- a fallen-behind recurring task shows as several
-     * individually-completable rows, not one perpetually-overdue one),
-     * each carrying its parent definition's fields, which specific
-     * assignee's copy this row is (if 'everyone' mode), and a
-     * completion-history summary (count + most recent date) computed from
-     * that task's *other*, done instances -- via correlated subqueries
-     * rather than a join, since the main result set is filtered to pending
-     * while the summary needs to see done ones too.
+     * listForHousehold(...) - one row per *task*, not per instance: cron's
+     * own lookahead window (bin/generate_task_instances.php) can leave a
+     * recurring task with several pending instances at once (its next few
+     * upcoming occurrences, or a real backlog if it's fallen behind), but
+     * this household-wide overview only ever shows the single soonest-due
+     * one -- "the root task the instances are generated from" -- per
+     * (task, assignee) pair, via the NOT EXISTS below (an earlier-or-equal
+     * pending instance for the same task_id/assigned_to_user_id). An
+     * 'everyone'-mode task's several concurrent per-assignee copies are
+     * separate (task_id, assigned_to_user_id) pairs, so each assignee still
+     * gets their own row here -- only *that assignee's own* future
+     * occurrences collapse down to one. Completing the shown instance
+     * reveals whichever one was next behind it on the following load, so a
+     * fallen-behind chore is still addressable one at a time, just not all
+     * shown in the tab at once. Each row carries its parent definition's
+     * fields, which specific assignee's copy this row is (if 'everyone'
+     * mode), and a completion-history summary (count + most recent date)
+     * computed from that task's *other*, done instances -- via correlated
+     * subqueries rather than a join, since the main result set is filtered
+     * to pending while the summary needs to see done ones too.
      *
      * ORDER BY bubbles every open-ended (NULL due_at) instance to the top,
      * highest priority first -- see self::PRIORITY_ORDER_SQL -- ahead of
@@ -169,6 +180,14 @@ final class HouseholdTaskInstanceRepository
              INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
              LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
              WHERE household_tasks.household_id = :household_id AND household_task_instances.status = 'pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM household_task_instances earlier
+                   WHERE earlier.task_id = household_task_instances.task_id
+                     AND earlier.assigned_to_user_id <=> household_task_instances.assigned_to_user_id
+                     AND earlier.status = 'pending'
+                     AND (earlier.due_at < household_task_instances.due_at
+                          OR (earlier.due_at <=> household_task_instances.due_at AND earlier.id < household_task_instances.id))
+               )
              ORDER BY (household_task_instances.due_at IS NULL) DESC, " . self::PRIORITY_ORDER_SQL . ",
                       household_task_instances.due_at ASC, household_task_instances.created_at DESC"
         );
