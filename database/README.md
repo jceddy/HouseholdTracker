@@ -162,7 +162,15 @@ above remains the only way migrations reach the deployed database.
   `completed_by_user_id`/`notes` columns rather than adding new ones). See
   "Skipping an occurrence" in `php-app/README.md`'s "Task/chore tracking"
   section.
+- **Home improvement projects** (`0015`, issue #11): `home_improvement_
+  projects` -- a project's own lifecycle (`status`, `estimated_cost`/
+  `actual_cost`, `target_date`), distinct from its linked tasks, which are
+  plain `household_tasks` tagged via the `source_type`/`source_id`
+  columns `0008` reserved for exactly this. No table at all for
+  maintenance (the recurring counterpart) -- it's just a recurring
+  `household_task` tagged `source_type = 'maintenance'`. See "Home
+  improvement projects and maintenance" in `php-app/README.md`.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations starting at `0013`.
+their own numbered migrations.

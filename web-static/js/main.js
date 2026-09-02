@@ -170,10 +170,15 @@
         // before this one.
         document.getElementById('household-tasks-finished-list').hidden = true;
         document.getElementById('household-tasks-finished-toggle').textContent = 'Show finished today';
+        // Same idea for a still-open project detail panel from whichever
+        // household was open before this one.
+        closeProjectDetail();
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
         await loadTasks(householdId);
+        await loadProjects(householdId);
+        await loadMaintenance(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -194,6 +199,7 @@
         const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
         currentMembers = body.members;
         populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
+        populateAssigneeCheckboxes(document.getElementById('hi-maintenance-assignees'));
 
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
@@ -732,6 +738,308 @@
         }
     }
 
+    // Home improvement projects and maintenance (issue #11). currentProjectId
+    // tracks which project's detail panel (if any) is currently open, the
+    // same module-scope-state pattern as currentHouseholdId itself.
+    let currentProjectId = null;
+
+    const PROJECT_STATUS_LABELS = {
+        idea: 'Idea',
+        planned: 'Planned',
+        in_progress: 'In progress',
+        completed: 'Completed',
+        abandoned: 'Abandoned',
+    };
+
+    function formatProjectLabel(project) {
+        const bits = [project.title, PROJECT_STATUS_LABELS[project.status] || project.status];
+        if (project.estimated_cost !== null) {
+            bits.push(`est. $${project.estimated_cost}`);
+        }
+        if (project.actual_cost !== null) {
+            bits.push(`actual $${project.actual_cost}`);
+        }
+        if (project.target_date) {
+            bits.push(`target ${project.target_date}`);
+        }
+        return bits.join(' — ');
+    }
+
+    // renderProjectEditForm(...) - same inline-edit pattern as
+    // renderTaskEditForm()/renderNoteEditForm()/renderPetEditForm().
+    function renderProjectEditForm(li, project, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const titleLabel = document.createElement('label');
+        titleLabel.textContent = 'Title';
+        const titleInput = document.createElement('input');
+        titleInput.type = 'text';
+        titleInput.value = project.title;
+        titleInput.maxLength = 150;
+        titleInput.required = true;
+        titleLabel.appendChild(titleInput);
+        form.appendChild(titleLabel);
+
+        const descriptionLabel = document.createElement('label');
+        descriptionLabel.textContent = 'Description';
+        const descriptionTextarea = document.createElement('textarea');
+        descriptionTextarea.value = project.description || '';
+        descriptionTextarea.maxLength = 2000;
+        descriptionLabel.appendChild(descriptionTextarea);
+        form.appendChild(descriptionLabel);
+
+        const statusLabel = document.createElement('label');
+        statusLabel.textContent = 'Status';
+        const statusSelect = document.createElement('select');
+        for (const [value, text] of Object.entries(PROJECT_STATUS_LABELS)) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            statusSelect.appendChild(option);
+        }
+        statusSelect.value = project.status;
+        statusLabel.appendChild(statusSelect);
+        form.appendChild(statusLabel);
+
+        const estimatedCostLabel = document.createElement('label');
+        estimatedCostLabel.textContent = 'Estimated cost';
+        const estimatedCostInput = document.createElement('input');
+        estimatedCostInput.type = 'number';
+        estimatedCostInput.min = '0';
+        estimatedCostInput.step = '0.01';
+        estimatedCostInput.value = project.estimated_cost !== null ? project.estimated_cost : '';
+        estimatedCostLabel.appendChild(estimatedCostInput);
+        form.appendChild(estimatedCostLabel);
+
+        const actualCostLabel = document.createElement('label');
+        actualCostLabel.textContent = 'Actual cost';
+        const actualCostInput = document.createElement('input');
+        actualCostInput.type = 'number';
+        actualCostInput.min = '0';
+        actualCostInput.step = '0.01';
+        actualCostInput.value = project.actual_cost !== null ? project.actual_cost : '';
+        actualCostLabel.appendChild(actualCostInput);
+        form.appendChild(actualCostLabel);
+
+        const targetDateLabel = document.createElement('label');
+        targetDateLabel.textContent = 'Target date';
+        const targetDateInput = document.createElement('input');
+        targetDateInput.type = 'date';
+        targetDateInput.value = project.target_date || '';
+        targetDateLabel.appendChild(targetDateInput);
+        form.appendChild(targetDateLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadProjects(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/projects/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    project_id: project.id,
+                    title: titleInput.value,
+                    description: descriptionTextarea.value,
+                    status: statusSelect.value,
+                    estimated_cost: estimatedCostInput.value,
+                    actual_cost: actualCostInput.value,
+                    target_date: targetDateInput.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadProjects(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save project.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
+    async function loadProjects(householdId) {
+        const { response, body } = await apiRequest('/households/projects?household_id=' + householdId);
+        const list = document.getElementById('home-improvement-projects-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const project of body.projects) {
+            const { li, actions } = buildListItem(formatProjectLabel(project));
+            actions.appendChild(buildButton('View tasks', () => openProjectDetail(project.id, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderProjectEditForm(li, project, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/projects/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ project_id: project.id }),
+                });
+                if (currentProjectId === project.id) {
+                    closeProjectDetail();
+                }
+                await loadProjects(householdId);
+            }));
+            list.appendChild(li);
+        }
+
+        // Keep an open project detail panel in sync with the list it came
+        // from, the same "reload whatever's currently visible" idea as
+        // loadTasks()'s own finished-list/dashboard refresh.
+        if (currentProjectId !== null) {
+            await openProjectDetail(currentProjectId, householdId);
+        }
+    }
+
+    // openProjectDetail(...)/closeProjectDetail() - only one project's
+    // detail panel is ever shown at a time (same singular-expand idea as
+    // the Tasks tab's own "Show finished today" toggle), rather than an
+    // inline expand per row -- simpler to keep in sync when a task is
+    // added/completed/deleted from within it.
+    async function openProjectDetail(projectId, householdId) {
+        const { response, body } = await apiRequest('/households/projects/detail?project_id=' + projectId);
+        if (!response.ok) {
+            closeProjectDetail();
+            return;
+        }
+
+        currentProjectId = projectId;
+        document.getElementById('home-improvement-project-detail').hidden = false;
+        document.getElementById('hi-project-detail-title').textContent = body.project.title;
+        document.getElementById('hi-project-detail-info').textContent = formatProjectLabel(body.project);
+        renderProjectDetailTasks(body.tasks, householdId);
+        populateAssigneeCheckboxes(document.getElementById('hi-project-task-assignees'));
+    }
+
+    function closeProjectDetail() {
+        currentProjectId = null;
+        document.getElementById('home-improvement-project-detail').hidden = true;
+    }
+
+    // renderProjectDetailTasks(...) - the project's own linked tasks
+    // (household_tasks tagged source_type = 'home_improvement_project',
+    // source_id = this project), reusing the exact same formatTaskLabel()/
+    // Complete/Skip/Edit/Delete actions the household Tasks tab uses --
+    // it's the same kind of row, just a different, project-scoped list.
+    function renderProjectDetailTasks(tasks, householdId) {
+        const list = document.getElementById('hi-project-detail-tasks');
+        list.innerHTML = '';
+
+        if (tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No tasks on this project yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadProjects(householdId);
+                await loadTasks(householdId);
+            }));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/tasks/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadProjects(householdId);
+                await loadTasks(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
+    // loadMaintenance(...)/renderMaintenanceList(...) - the Maintenance
+    // schedule: recurring household_tasks tagged source_type =
+    // 'maintenance' (see TaskService::validateSource()'s own docblock).
+    // These same tasks also still show up in the ordinary Tasks tab and
+    // dashboard -- this is a second, filtered view onto the same rows, so
+    // it reuses the same row rendering (Complete/Skip/Edit/Delete, due-
+    // today highlight) as loadTasks() does.
+    async function loadMaintenance(householdId) {
+        const { response, body } = await apiRequest('/households/maintenance?household_id=' + householdId);
+        const list = document.getElementById('home-improvement-maintenance-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No maintenance items yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of body.tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadMaintenance(householdId);
+                await loadTasks(householdId);
+            }));
+            actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, async () => {
+                await loadMaintenance(householdId);
+                await loadTasks(householdId);
+            })));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/tasks/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadMaintenance(householdId);
+                await loadTasks(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // formatFinishedTaskLabel(...) - for the "Show finished today" list:
     // who resolved it and when, plus the note either way -- required for a
     // skip (the whole point of a skip over an outright delete), optional
@@ -1026,6 +1334,102 @@
         const frequency = event.target.value;
         document.getElementById('household-task-interval-row').hidden = !frequency;
         document.getElementById('household-task-interval-unit').textContent = RECURRENCE_UNITS[frequency] ? `${RECURRENCE_UNITS[frequency]}(s)` : 'day(s)';
+    });
+
+    document.getElementById('hi-maintenance-frequency').addEventListener('change', (event) => {
+        const frequency = event.target.value;
+        document.getElementById('hi-maintenance-interval-unit').textContent = RECURRENCE_UNITS[frequency] ? `${RECURRENCE_UNITS[frequency]}(s)` : 'month(s)';
+    });
+
+    document.getElementById('home-improvement-project-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('hi-project-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/projects', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                description: form.description.value,
+                status: form.status.value,
+                estimated_cost: form.estimated_cost.value,
+                target_date: form.target_date.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadProjects(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add project.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('hi-project-detail-close').addEventListener('click', closeProjectDetail);
+
+    document.getElementById('hi-project-task-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('hi-project-task-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('hi-project-task-assignees')),
+                due_at: form.due_at.value,
+                source_type: 'home_improvement_project',
+                source_id: currentProjectId,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadProjects(currentHouseholdId);
+            await loadTasks(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add task.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('home-improvement-maintenance-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('hi-maintenance-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('hi-maintenance-assignees')),
+                recurrence_frequency: form.recurrence_frequency.value,
+                recurrence_interval: form.recurrence_interval.value,
+                source_type: 'maintenance',
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMaintenance(currentHouseholdId);
+            await loadTasks(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add maintenance item.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
     });
 
     document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
