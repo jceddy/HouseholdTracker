@@ -895,6 +895,26 @@ if ($path === '/households/tasks/complete' && $method === 'POST') {
     }
 }
 
+if ($path === '/households/tasks/skip' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $task = $tasks->skipInstance(
+            (int) $currentUser['id'],
+            (int) ($body['instance_id'] ?? 0),
+            (string) ($body['notes'] ?? '')
+        );
+        respond(200, ['status' => 'ok', 'task' => $task]);
+    } catch (TaskNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/tasks/mine' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     respond(200, ['status' => 'ok', 'tasks' => $tasks->listMyTasks((int) $currentUser['id'])]);

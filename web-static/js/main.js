@@ -44,6 +44,9 @@
     const CHECK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
         + '<polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const SKIP_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+        + '<polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>';
 
     // buildIconButton(...) - same idea as buildButton(), but shows an icon
     // instead of text; the text is still there for screen readers via
@@ -527,6 +530,69 @@
         return bits.join(' — ');
     }
 
+    // renderSkipForm(...) - inline reason-required mini-form for skipping a
+    // recurring task's occurrence (POST /households/tasks/skip), same
+    // inline-replace pattern as renderTaskEditForm()/renderNoteEditForm()/
+    // renderPetEditForm(). Distinct from Complete (it happened) and Delete
+    // (no record left at all): skipping keeps a note on why this
+    // occurrence isn't happening ("didn't walk the dog -- there was a
+    // tornado"). Only ever wired up for a recurring task by its callers
+    // below, but TaskService::skipInstance() enforces that server-side too.
+    function renderSkipForm(li, task, reload) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Why was this skipped?';
+        const notesInput = document.createElement('input');
+        notesInput.type = 'text';
+        notesInput.maxLength = 2000;
+        notesInput.required = true;
+        notesLabel.appendChild(notesInput);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const skipButton = document.createElement('button');
+        skipButton.type = 'submit';
+        skipButton.className = 'button--compact';
+        skipButton.textContent = 'Skip';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => reload());
+        row.appendChild(skipButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/tasks/skip', {
+                method: 'POST',
+                body: JSON.stringify({ instance_id: task.id, notes: notesInput.value }),
+            });
+
+            if (response.ok) {
+                await reload();
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not skip task.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
     async function loadTasks(householdId) {
         const { response, body } = await apiRequest('/households/tasks?household_id=' + householdId);
         const list = document.getElementById('household-tasks-list');
@@ -545,6 +611,9 @@
                 });
                 await loadTasks(householdId);
             }));
+            if (task.recurrence_frequency) {
+                actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadTasks(householdId))));
+            }
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
@@ -616,6 +685,9 @@
                 });
                 await loadMyTasks();
             }));
+            if (task.recurrence_frequency) {
+                actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadMyTasks())));
+            }
             list.appendChild(li);
         }
     }

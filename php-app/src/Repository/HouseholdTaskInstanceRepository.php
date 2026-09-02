@@ -133,6 +133,23 @@ final class HouseholdTaskInstanceRepository
         $stmt->execute(['completed_by_user_id' => $completedByUserId, 'notes' => $notes, 'id' => $id]);
     }
 
+    /**
+     * markSkipped(...) - same completed_at/completed_by_user_id/notes
+     * columns as markDone() (migration `0012`'s own comment explains why
+     * there's no separate skipped_at/skipped_by_user_id) -- $notes here is
+     * always a real, non-empty explanation, since TaskService::
+     * skipInstance() requires one before ever calling this.
+     */
+    public function markSkipped(int $id, int $skippedByUserId, string $notes): void
+    {
+        $stmt = Connection::get()->prepare(
+            "UPDATE household_task_instances
+             SET status = 'skipped', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = :notes
+             WHERE id = :id"
+        );
+        $stmt->execute(['completed_by_user_id' => $skippedByUserId, 'notes' => $notes, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM household_task_instances WHERE id = :id');
@@ -244,17 +261,18 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
-     * purgeDoneOlderThan(...)/purgeExpiredPendingOlderThan(...) - the daily
-     * cron script's cleanup half (bin/generate_task_instances.php): old
-     * completed instances are pure history past a point, and a pending
-     * instance nobody ever completed shouldn't clutter the list forever
-     * either. Return the number of rows removed, for the script's own log
-     * output.
+     * purgeResolvedOlderThan(...)/purgeExpiredPendingOlderThan(...) - the
+     * daily cron script's cleanup half (bin/generate_task_instances.php):
+     * an old completed *or skipped* instance is pure history past a point
+     * -- both are equally "resolved," just with a different outcome -- and
+     * a pending instance nobody ever completed shouldn't clutter the list
+     * forever either. Return the number of rows removed, for the script's
+     * own log output.
      */
-    public function purgeDoneOlderThan(int $days): int
+    public function purgeResolvedOlderThan(int $days): int
     {
         $stmt = Connection::get()->prepare(
-            "DELETE FROM household_task_instances WHERE status = 'done' AND completed_at < (NOW() - INTERVAL :days DAY)"
+            "DELETE FROM household_task_instances WHERE status IN ('done', 'skipped') AND completed_at < (NOW() - INTERVAL :days DAY)"
         );
         $stmt->bindValue('days', $days, \PDO::PARAM_INT);
         $stmt->execute();

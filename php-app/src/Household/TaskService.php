@@ -52,6 +52,14 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * priority first ("bubble to the top... in reverse-priority order"). A
  * dated or recurring task can have a priority set too (not rejected), it
  * just isn't used to reorder anything outside the no-deadline group.
+ *
+ * **Skipping a recurring occurrence** (#12's own follow-up, migration
+ * `0012`): completeInstance() means it happened; deleteInstance() removes
+ * the row entirely; skipInstance() is the third option, for a recurring
+ * chore's occurrence that isn't happening this time but is worth a reason
+ * on record ("didn't walk the dog -- there was a tornado") -- status
+ * `'skipped'`, with a *required* note. One-off tasks can't be skipped
+ * (delete instead); see skipInstance()'s own docblock.
  */
 final class TaskService
 {
@@ -207,6 +215,39 @@ final class TaskService
         }
 
         $this->instances->markDone($instanceId, $callerId, $notes);
+
+        return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
+    }
+
+    /**
+     * skipInstance(...) - "this occurrence isn't happening" for a recurring
+     * chore ("didn't walk the dog -- there was a tornado"), distinct from
+     * completeInstance() (it wasn't done) and deleteInstance() (it still
+     * happened, on record, just not by doing the chore -- deleting loses
+     * that entirely). Recurring-only: a one-off task has nothing recurring
+     * to skip *to* the next occurrence of, and already has delete for
+     * "get rid of this." $notes is required and non-empty here, unlike
+     * completeInstance()'s optional one -- a skip without a reason is just
+     * a delete that leaves a row behind.
+     */
+    public function skipInstance(int $callerId, int $instanceId, string $notes): array
+    {
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
+        $task = $this->tasks->findById((int) $instance['task_id']);
+
+        if ($task['recurrence_frequency'] === null) {
+            throw new \InvalidArgumentException('Only a recurring task can be skipped -- delete a one-off task instead.');
+        }
+
+        $notes = trim($notes);
+        if ($notes === '') {
+            throw new \InvalidArgumentException('A note explaining why this was skipped is required.');
+        }
+        if (strlen($notes) > self::MAX_NOTES_LENGTH) {
+            throw new \InvalidArgumentException('Skip notes must be ' . self::MAX_NOTES_LENGTH . ' characters or fewer.');
+        }
+
+        $this->instances->markSkipped($instanceId, $callerId, $notes);
 
         return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
     }
