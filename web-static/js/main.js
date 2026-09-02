@@ -463,20 +463,30 @@
         return interval === 1 ? `every ${unit}` : `every ${interval} ${unit}s`;
     }
 
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // todayIso() - the viewer's LOCAL calendar date as YYYY-MM-DD.
+    // getFullYear()/getMonth()/getDate() are local-time accessors, unlike
+    // toISOString() (used here previously), which reports the UTC date and
+    // shifts "today" a day early for any timezone behind UTC.
+    function todayIso() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
 
     // isTaskOverdue(...) - the list only ever contains *pending* instances
     // (see loadTasks()/loadMyTasks()'s own routes), so there's no status
     // check needed here anymore -- just whether its due date has passed.
     function isTaskOverdue(task) {
-        return !!task.due_at && task.due_at < todayIso;
+        return !!task.due_at && task.due_at < todayIso();
     }
 
     // isDueToday(...) - for highlighting a task row -- distinct from
     // isTaskOverdue() (strictly *before* today), so the two never both
     // apply to the same task.
     function isDueToday(task) {
-        return task.due_at === todayIso;
+        return task.due_at === todayIso();
     }
 
     // formatAssigneesBit(...) - shared by formatTaskLabel()/
