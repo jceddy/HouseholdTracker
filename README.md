@@ -53,9 +53,9 @@ backward-incompatible ways at any time before `1.0.0`.
 `VERSION` is bumped by hand as part of whatever PR the version change
 belongs to.
 
-**Hard requirement: any change that includes a database migration must
-also bump `VERSION`.** The deployed app compares `VERSION` against a
-version value stored in the database (`schema_version`, see
+**Hard requirement: every merged change bumps `VERSION` — not only one
+that includes a database migration.** The deployed app compares `VERSION`
+against a version value stored in the database (`schema_version`, see
 `database/README.md`) on every request, and shows a maintenance page on
 any mismatch — see `MaintenanceGate` in `php-app/README.md`. This exists
 because production's GitHub Actions runner has no direct access to the
@@ -65,6 +65,11 @@ this check, a deploy that shipped code depending on a not-yet-applied
 migration would run silently against a stale schema for however long that
 request takes, instead of visibly blocking traffic until the migration
 catches up.
+
+Since `VERSION` and `schema_version` must always match exactly (that's the
+whole check), a change with nothing to migrate still needs a migration
+file to carry the bump — see "Adding a new migration" in
+`database/README.md` for this "version-only" migration shape.
 
 ## Deployment
 
