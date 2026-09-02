@@ -671,7 +671,7 @@
             if (task.recurrence_frequency) {
                 actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadTasks(householdId))));
             }
-            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, () => loadTasks(householdId))));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
                     method: 'POST',
@@ -991,7 +991,10 @@
                 await loadProjects(householdId);
                 await loadTasks(householdId);
             }));
-            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, async () => {
+                await loadProjects(householdId);
+                await loadTasks(householdId);
+            })));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
                     method: 'POST',
@@ -1047,7 +1050,10 @@
                 await loadMaintenance(householdId);
                 await loadTasks(householdId);
             })));
-            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, async () => {
+                await loadMaintenance(householdId);
+                await loadTasks(householdId);
+            })));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
                     method: 'POST',
@@ -1191,7 +1197,16 @@
     // assignee/recurrence) and this specific instance's own due date --
     // see TaskService::updateTask()'s own docblock for why moving the due
     // date only affects the instance being edited, not the whole series.
-    function renderTaskEditForm(li, task, householdId) {
+    //
+    // $reload (same idea as renderSkipForm()'s own $reload) - this form
+    // gets embedded in several different lists now (the Tasks tab, a
+    // project's own task list, the Maintenance schedule), each needing its
+    // *own* list refreshed after a save/cancel, not always the Tasks tab's
+    // -- a task edited from the Maintenance section, say, still needs
+    // #home-improvement-maintenance-list re-rendered, or the edit form
+    // just sits there looking like Save silently did nothing even though
+    // the update went through.
+    function renderTaskEditForm(li, task, householdId, reload) {
         li.innerHTML = '';
 
         const form = document.createElement('form');
@@ -1309,7 +1324,7 @@
         cancelButton.type = 'button';
         cancelButton.className = 'button--compact';
         cancelButton.textContent = 'Cancel';
-        cancelButton.addEventListener('click', () => loadTasks(householdId));
+        cancelButton.addEventListener('click', () => reload());
         row.appendChild(saveButton);
         row.appendChild(cancelButton);
         form.appendChild(row);
@@ -1338,7 +1353,7 @@
             });
 
             if (response.ok) {
-                await loadTasks(householdId);
+                await reload();
                 return;
             }
 
