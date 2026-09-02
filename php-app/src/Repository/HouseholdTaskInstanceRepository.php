@@ -30,13 +30,14 @@ final class HouseholdTaskInstanceRepository
      */
     private const PRIORITY_ORDER_SQL = "FIELD(household_tasks.priority, 'critical', 'high', 'medium', 'low')";
 
-    public function create(int $taskId, ?string $dueAt, ?int $assignedToUserId = null): array
+    public function create(int $taskId, ?string $dueAt, ?int $assignedToUserId = null, ?string $notes = null): array
     {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
-            'INSERT INTO household_task_instances (task_id, due_at, assigned_to_user_id) VALUES (:task_id, :due_at, :assigned_to_user_id)'
+            'INSERT INTO household_task_instances (task_id, due_at, assigned_to_user_id, notes)
+             VALUES (:task_id, :due_at, :assigned_to_user_id, :notes)'
         );
-        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId]);
+        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId, 'notes' => $notes]);
 
         return $this->findById((int) $pdo->lastInsertId());
     }
@@ -123,14 +124,54 @@ final class HouseholdTaskInstanceRepository
         $stmt->execute(['due_at' => $dueAt, 'id' => $id]);
     }
 
+    /**
+     * updateNotes(...) - a direct, explicit set (task/chore tracking's own
+     * follow-up: general notes on a task, not just a resolution reason) --
+     * unlike markDone()'s $notes, a null here really does mean "clear it",
+     * since this is the one method whose whole job is setting notes on
+     * purpose. Works on a pending instance same as a resolved one.
+     */
+    public function updateNotes(int $id, ?string $notes): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE household_task_instances SET notes = :notes WHERE id = :id');
+        $stmt->execute(['notes' => $notes, 'id' => $id]);
+    }
+
+    /**
+     * markDone(...) - `COALESCE(:notes, notes)` rather than a plain
+     * overwrite: completing a task is usually just a click with no notes
+     * of its own, and shouldn't silently wipe out whatever note was
+     * already on the task (see updateNotes()) just because none was given
+     * *this* time. Passing an explicit (even empty-string) note still
+     * replaces it -- only an omitted (null) one preserves what's there.
+     */
     public function markDone(int $id, int $completedByUserId, ?string $notes): void
     {
         $stmt = Connection::get()->prepare(
             "UPDATE household_task_instances
-             SET status = 'done', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = :notes
+             SET status = 'done', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = COALESCE(:notes, notes)
              WHERE id = :id"
         );
         $stmt->execute(['completed_by_user_id' => $completedByUserId, 'notes' => $notes, 'id' => $id]);
+    }
+
+    /**
+     * markSkipped(...) - same completed_at/completed_by_user_id/notes
+     * columns as markDone() (migration `0012`'s own comment explains why
+     * there's no separate skipped_at/skipped_by_user_id) -- but always
+     * overwrites $notes outright, unlike markDone()'s COALESCE-preserve:
+     * $notes here is always a real, non-empty explanation (TaskService::
+     * skipInstance() requires one before ever calling this), and the skip
+     * reason is what matters most once an occurrence is skipped.
+     */
+    public function markSkipped(int $id, int $skippedByUserId, string $notes): void
+    {
+        $stmt = Connection::get()->prepare(
+            "UPDATE household_task_instances
+             SET status = 'skipped', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = :notes
+             WHERE id = :id"
+        );
+        $stmt->execute(['completed_by_user_id' => $skippedByUserId, 'notes' => $notes, 'id' => $id]);
     }
 
     public function delete(int $id): void
@@ -197,6 +238,39 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
+     * listFinishedToday(...) - the household Tasks tab's "Show finished
+     * today" list: every instance resolved today, completed *or* skipped,
+     * newest first -- the counterpart to listForHousehold()'s pending-only
+     * view, which drops a resolved instance the moment it's no longer
+     * pending. `completed_at >= CURDATE()` rather than wrapping the column
+     * in `DATE(...)` -- reads the same but stays sargable, and
+     * `completed_at` is never in the future so there's no upper bound to
+     * add. Carries `completed_by_username` (who resolved it) alongside the
+     * `assigned_to_username` the other list methods already return, since
+     * a skip's whole point is knowing who skipped it and, via `notes`,
+     * why.
+     */
+    public function listFinishedToday(int $householdId): array
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
+                    household_tasks.assignment_mode, household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
+                    assignee.username AS assigned_to_username, completed_by.username AS completed_by_username
+             FROM household_task_instances
+             INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
+             LEFT JOIN users AS completed_by ON completed_by.id = household_task_instances.completed_by_user_id
+             WHERE household_tasks.household_id = :household_id
+               AND household_task_instances.status IN ('done', 'skipped')
+               AND household_task_instances.completed_at >= CURDATE()
+             ORDER BY household_task_instances.completed_at DESC"
+        );
+        $stmt->execute(['household_id' => $householdId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
      * listAssignedToUser(...) - the "My Tasks" view: every pending instance
      * that is *this user's own to act on* across every household they
      * belong to -- either a shared 'anyone'-mode instance for a task they're
@@ -244,17 +318,18 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
-     * purgeDoneOlderThan(...)/purgeExpiredPendingOlderThan(...) - the daily
-     * cron script's cleanup half (bin/generate_task_instances.php): old
-     * completed instances are pure history past a point, and a pending
-     * instance nobody ever completed shouldn't clutter the list forever
-     * either. Return the number of rows removed, for the script's own log
-     * output.
+     * purgeResolvedOlderThan(...)/purgeExpiredPendingOlderThan(...) - the
+     * daily cron script's cleanup half (bin/generate_task_instances.php):
+     * an old completed *or skipped* instance is pure history past a point
+     * -- both are equally "resolved," just with a different outcome -- and
+     * a pending instance nobody ever completed shouldn't clutter the list
+     * forever either. Return the number of rows removed, for the script's
+     * own log output.
      */
-    public function purgeDoneOlderThan(int $days): int
+    public function purgeResolvedOlderThan(int $days): int
     {
         $stmt = Connection::get()->prepare(
-            "DELETE FROM household_task_instances WHERE status = 'done' AND completed_at < (NOW() - INTERVAL :days DAY)"
+            "DELETE FROM household_task_instances WHERE status IN ('done', 'skipped') AND completed_at < (NOW() - INTERVAL :days DAY)"
         );
         $stmt->bindValue('days', $days, \PDO::PARAM_INT);
         $stmt->execute();

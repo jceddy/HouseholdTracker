@@ -118,12 +118,19 @@
 
         <div class="tab-panel" id="tab-panel-tasks" role="tabpanel" hidden>
             <ul id="household-tasks-list"></ul>
+            <div class="form-row">
+                <button type="button" id="household-tasks-finished-toggle" class="button--compact">Show finished today</button>
+            </div>
+            <ul id="household-tasks-finished-list" hidden></ul>
             <form id="household-task-form">
                 <label>Title
                     <input type="text" id="household-task-title" name="title" required maxlength="150">
                 </label>
                 <label>Description
                     <textarea id="household-task-description" name="description" maxlength="2000"></textarea>
+                </label>
+                <label>Notes
+                    <textarea id="household-task-notes" name="notes" maxlength="2000"></textarea>
                 </label>
                 <fieldset class="checkbox-fieldset">
                     <legend>Assign to</legend>

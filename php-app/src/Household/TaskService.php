@@ -52,6 +52,29 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * priority first ("bubble to the top... in reverse-priority order"). A
  * dated or recurring task can have a priority set too (not rejected), it
  * just isn't used to reorder anything outside the no-deadline group.
+ *
+ * **Skipping a recurring occurrence** (#12's own follow-up, migration
+ * `0012`): completeInstance() means it happened; deleteInstance() removes
+ * the row entirely; skipInstance() is the third option, for a recurring
+ * chore's occurrence that isn't happening this time but is worth a reason
+ * on record ("didn't walk the dog -- there was a tornado") -- status
+ * `'skipped'`, with a *required* note. One-off tasks can't be skipped
+ * (delete instead); see skipInstance()'s own docblock.
+ *
+ * **Viewing finished tasks** (#12's own follow-up): a completed or skipped
+ * instance drops off listTasks()/listMyTasks() the moment it's no longer
+ * pending, same as always -- listFinishedToday() is the household Tasks
+ * tab's separate window into what actually got resolved today (either
+ * way), so that history isn't just invisible once acted on.
+ *
+ * **Notes on a task** (#12's own follow-up): `notes` isn't only a
+ * completion/skip explanation any more -- createTask()/updateTask() can
+ * set it directly on a still-pending instance too, for anything worth
+ * jotting down about this occurrence ("need to buy dish soap first").
+ * completeInstance() leaves it alone when no new note is given (see
+ * HouseholdTaskInstanceRepository::markDone()'s own docblock) rather than
+ * clearing it on a plain "mark done" click; skipInstance()'s note always
+ * overwrites, since the skip reason is what matters most from then on.
  */
 final class TaskService
 {
@@ -73,6 +96,19 @@ final class TaskService
         $this->requireMember($householdId, $callerId);
 
         return $this->attachAssignees($this->instances->listForHousehold($householdId));
+    }
+
+    /**
+     * listFinishedToday(...) - the household Tasks tab's "Show finished
+     * today" list: every instance resolved today, completed or skipped
+     * alike -- see HouseholdTaskInstanceRepository::listFinishedToday()'s
+     * own docblock.
+     */
+    public function listFinishedToday(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->attachAssignees($this->instances->listFinishedToday($householdId));
     }
 
     /**
@@ -106,7 +142,8 @@ final class TaskService
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         ?string $dueAt,
-        ?string $priority
+        ?string $priority,
+        ?string $notes = null
     ): array {
         $this->requireMember($householdId, $callerId);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
@@ -115,6 +152,7 @@ final class TaskService
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
         $dueAt = $this->validateDueAt($dueAt, $recurrenceFrequency !== null);
         $priority = $this->validatePriority($priority, $recurrenceFrequency === null && $dueAt === null);
+        $notes = $this->validateNotes($notes);
         // start_date is NOT NULL on the definition even for an open-ended
         // task (due_at NULL) -- see HouseholdTaskRepository's own docblock,
         // its value is simply never read for a task cron doesn't process.
@@ -124,8 +162,8 @@ final class TaskService
         $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
 
         $instances = $assignmentMode === 'everyone'
-            ? array_map(fn (int $userId): array => $this->instances->create((int) $task['id'], $dueAt, $userId), $assignedToUserIds)
-            : [$this->instances->create((int) $task['id'], $dueAt)];
+            ? array_map(fn (int $userId): array => $this->instances->create((int) $task['id'], $dueAt, $userId, $notes), $assignedToUserIds)
+            : [$this->instances->create((int) $task['id'], $dueAt, null, $notes)];
 
         return $this->attachAssignees(array_map(
             fn (array $instance): array => $this->instances->findByIdWithTaskInfo((int) $instance['id']),
@@ -155,7 +193,8 @@ final class TaskService
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
         ?string $dueAt,
-        ?string $priority
+        ?string $priority,
+        ?string $notes = null
     ): array {
         $instance = $this->requireMemberForInstance($callerId, $instanceId);
         $task = $this->tasks->findById((int) $instance['task_id']);
@@ -165,10 +204,16 @@ final class TaskService
         [$recurrenceFrequency, $recurrenceInterval] = $this->validateRecurrence($recurrenceFrequency, $recurrenceInterval);
         $dueAt = $this->validateDueAt($dueAt, $recurrenceFrequency !== null);
         $priority = $this->validatePriority($priority, $recurrenceFrequency === null && $dueAt === null);
+        $notes = $this->validateNotes($notes);
 
         $this->tasks->update((int) $task['id'], $title, $description, $assignmentMode, $priority, $recurrenceFrequency, $recurrenceInterval);
         $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
         $this->instances->updateDueAt($instanceId, $dueAt);
+        // updateNotes(), not markDone()'s preserve-if-omitted COALESCE --
+        // this is an explicit edit, so an omitted/blank notes field here
+        // really does mean "clear it," the same as clearing the
+        // description would.
+        $this->instances->updateNotes($instanceId, $notes);
 
         return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
     }
@@ -196,17 +241,50 @@ final class TaskService
         }
     }
 
+    /**
+     * completeInstance(...) - $notes here is optional and, if omitted,
+     * preserves whatever note the task already had (see
+     * HouseholdTaskInstanceRepository::markDone()'s own docblock) rather
+     * than clearing it -- completing a task is usually just a click, and
+     * shouldn't silently wipe out a note someone wrote while it was still
+     * pending.
+     */
     public function completeInstance(int $callerId, int $instanceId, ?string $notes): array
     {
         $instance = $this->requireMemberForInstance($callerId, $instanceId);
-
-        $notes = $notes !== null ? trim($notes) : null;
-        $notes = $notes === '' ? null : $notes;
-        if ($notes !== null && strlen($notes) > self::MAX_NOTES_LENGTH) {
-            throw new \InvalidArgumentException('Completion notes must be ' . self::MAX_NOTES_LENGTH . ' characters or fewer.');
-        }
+        $notes = $this->validateNotes($notes);
 
         $this->instances->markDone($instanceId, $callerId, $notes);
+
+        return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
+    }
+
+    /**
+     * skipInstance(...) - "this occurrence isn't happening" for a recurring
+     * chore ("didn't walk the dog -- there was a tornado"), distinct from
+     * completeInstance() (it wasn't done) and deleteInstance() (it still
+     * happened, on record, just not by doing the chore -- deleting loses
+     * that entirely). Recurring-only: a one-off task has nothing recurring
+     * to skip *to* the next occurrence of, and already has delete for
+     * "get rid of this." $notes is required and non-empty here, unlike
+     * completeInstance()'s optional one -- a skip without a reason is just
+     * a delete that leaves a row behind.
+     */
+    public function skipInstance(int $callerId, int $instanceId, string $notes): array
+    {
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
+        $task = $this->tasks->findById((int) $instance['task_id']);
+
+        if ($task['recurrence_frequency'] === null) {
+            throw new \InvalidArgumentException('Only a recurring task can be skipped -- delete a one-off task instead.');
+        }
+
+        $notes = $this->validateNotes($notes);
+        if ($notes === null) {
+            throw new \InvalidArgumentException('A note explaining why this was skipped is required.');
+        }
+
+        $this->instances->markSkipped($instanceId, $callerId, $notes);
 
         return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
     }
@@ -298,6 +376,24 @@ final class TaskService
         }
 
         return [$title, $description];
+    }
+
+    /**
+     * validateNotes(...) - shared by createTask()/updateTask()/
+     * completeInstance()/skipInstance(): trim, blank becomes null, and a
+     * length cap -- same shape as validateTitleAndDescription()'s own
+     * description handling. Doesn't enforce non-blank itself -- callers
+     * that need that (skipInstance()) check the null result themselves.
+     */
+    private function validateNotes(?string $notes): ?string
+    {
+        $notes = $notes !== null ? trim($notes) : null;
+        $notes = $notes === '' ? null : $notes;
+        if ($notes !== null && strlen($notes) > self::MAX_NOTES_LENGTH) {
+            throw new \InvalidArgumentException('Notes must be ' . self::MAX_NOTES_LENGTH . ' characters or fewer.');
+        }
+
+        return $notes;
     }
 
     /**

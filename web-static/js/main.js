@@ -44,6 +44,9 @@
     const CHECK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
         + '<polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const SKIP_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+        + '<polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>';
 
     // buildIconButton(...) - same idea as buildButton(), but shows an icon
     // instead of text; the text is still there for screen readers via
@@ -162,6 +165,11 @@
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
         activateTab('members');
+        // Reset rather than carry over stale finished-today data (and its
+        // "Hide finished today" label) from whichever household was open
+        // before this one.
+        document.getElementById('household-tasks-finished-list').hidden = true;
+        document.getElementById('household-tasks-finished-toggle').textContent = 'Show finished today';
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
@@ -455,13 +463,30 @@
         return interval === 1 ? `every ${unit}` : `every ${interval} ${unit}s`;
     }
 
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // todayIso() - the viewer's LOCAL calendar date as YYYY-MM-DD.
+    // getFullYear()/getMonth()/getDate() are local-time accessors, unlike
+    // toISOString() (used here previously), which reports the UTC date and
+    // shifts "today" a day early for any timezone behind UTC.
+    function todayIso() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
 
     // isTaskOverdue(...) - the list only ever contains *pending* instances
     // (see loadTasks()/loadMyTasks()'s own routes), so there's no status
     // check needed here anymore -- just whether its due date has passed.
     function isTaskOverdue(task) {
-        return !!task.due_at && task.due_at < todayIso;
+        return !!task.due_at && task.due_at < todayIso();
+    }
+
+    // isDueToday(...) - for highlighting a task row -- distinct from
+    // isTaskOverdue() (strictly *before* today), so the two never both
+    // apply to the same task.
+    function isDueToday(task) {
+        return task.due_at === todayIso();
     }
 
     // formatAssigneesBit(...) - shared by formatTaskLabel()/
@@ -521,10 +546,76 @@
         if (dueAtBit) {
             bits.push(dueAtBit);
         }
+        if (task.notes) {
+            bits.push(`note: ${task.notes}`);
+        }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
         }
         return bits.join(' — ');
+    }
+
+    // renderSkipForm(...) - inline reason-required mini-form for skipping a
+    // recurring task's occurrence (POST /households/tasks/skip), same
+    // inline-replace pattern as renderTaskEditForm()/renderNoteEditForm()/
+    // renderPetEditForm(). Distinct from Complete (it happened) and Delete
+    // (no record left at all): skipping keeps a note on why this
+    // occurrence isn't happening ("didn't walk the dog -- there was a
+    // tornado"). Only ever wired up for a recurring task by its callers
+    // below, but TaskService::skipInstance() enforces that server-side too.
+    function renderSkipForm(li, task, reload) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Why was this skipped?';
+        const notesInput = document.createElement('input');
+        notesInput.type = 'text';
+        notesInput.maxLength = 2000;
+        notesInput.required = true;
+        notesLabel.appendChild(notesInput);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const skipButton = document.createElement('button');
+        skipButton.type = 'submit';
+        skipButton.className = 'button--compact';
+        skipButton.textContent = 'Skip';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => reload());
+        row.appendChild(skipButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/tasks/skip', {
+                method: 'POST',
+                body: JSON.stringify({ instance_id: task.id, notes: notesInput.value }),
+            });
+
+            if (response.ok) {
+                await reload();
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not skip task.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
     }
 
     async function loadTasks(householdId) {
@@ -538,6 +629,9 @@
 
         for (const task of body.tasks) {
             const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -545,6 +639,9 @@
                 });
                 await loadTasks(householdId);
             }));
+            if (task.recurrence_frequency) {
+                actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadTasks(householdId))));
+            }
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId)));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/tasks/delete', {
@@ -553,6 +650,57 @@
                 });
                 await loadTasks(householdId);
             }));
+            list.appendChild(li);
+        }
+
+        // Keep the "finished today" list in sync whenever it's visible --
+        // loadTasks() is already what every complete/skip/delete/edit-cancel
+        // action reloads after itself, so this is the one place that needs
+        // to know about it.
+        if (!document.getElementById('household-tasks-finished-list').hidden) {
+            await loadFinishedTasksToday(householdId);
+        }
+    }
+
+    // formatFinishedTaskLabel(...) - for the "Show finished today" list:
+    // who resolved it and when, plus the note either way -- required for a
+    // skip (the whole point of a skip over an outright delete), optional
+    // (and possibly just whatever was already on the task before it was
+    // completed) for a done one.
+    function formatFinishedTaskLabel(task) {
+        const bits = [task.title];
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
+        }
+        const actor = task.completed_by_username ? ` by ${task.completed_by_username}` : '';
+        const at = task.completed_at ? ` at ${task.completed_at}` : '';
+        if (task.status === 'skipped') {
+            bits.push(`skipped${actor}${at}${task.notes ? `: ${task.notes}` : ''}`);
+        } else {
+            bits.push(`completed${actor}${at}${task.notes ? ` — note: ${task.notes}` : ''}`);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadFinishedTasksToday(householdId) {
+        const { response, body } = await apiRequest('/households/tasks/finished?household_id=' + householdId);
+        const list = document.getElementById('household-tasks-finished-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing finished today yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of body.tasks) {
+            const { li } = buildListItem(formatFinishedTaskLabel(task));
             list.appendChild(li);
         }
     }
@@ -575,6 +723,9 @@
         const dueAtBit = formatDueAtBit(task);
         if (dueAtBit) {
             bits.push(dueAtBit);
+        }
+        if (task.notes) {
+            bits.push(`note: ${task.notes}`);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -609,6 +760,9 @@
 
         for (const task of tasks) {
             const { li, actions } = buildListItem(formatMyTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -616,6 +770,9 @@
                 });
                 await loadMyTasks();
             }));
+            if (task.recurrence_frequency) {
+                actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadMyTasks())));
+            }
             list.appendChild(li);
         }
     }
@@ -656,6 +813,14 @@
         descriptionTextarea.maxLength = 2000;
         descriptionLabel.appendChild(descriptionTextarea);
         form.appendChild(descriptionLabel);
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = task.notes || '';
+        notesTextarea.maxLength = 2000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
 
         const assigneeFieldset = document.createElement('fieldset');
         assigneeFieldset.className = 'checkbox-fieldset';
@@ -761,6 +926,7 @@
                     instance_id: task.id,
                     title: titleInput.value,
                     description: descriptionTextarea.value,
+                    notes: notesTextarea.value,
                     assigned_to_user_ids: getCheckedAssigneeIds(assigneesContainer),
                     assignment_mode: modeSelect.value,
                     recurrence_frequency: frequencySelect.value,
@@ -791,6 +957,18 @@
 
     document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
     document.getElementById('my-tasks-refresh-button').addEventListener('click', () => loadMyTasks());
+
+    document.getElementById('household-tasks-finished-toggle').addEventListener('click', async (event) => {
+        const list = document.getElementById('household-tasks-finished-list');
+        if (list.hidden) {
+            await loadFinishedTasksToday(currentHouseholdId);
+            list.hidden = false;
+            event.target.textContent = 'Hide finished today';
+        } else {
+            list.hidden = true;
+            event.target.textContent = 'Show finished today';
+        }
+    });
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });
@@ -931,6 +1109,7 @@
                 household_id: currentHouseholdId,
                 title: form.title.value,
                 description: form.description.value,
+                notes: form.notes.value,
                 assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-task-assignees')),
                 assignment_mode: form.assignment_mode.value,
                 recurrence_frequency: form.recurrence_frequency.value,

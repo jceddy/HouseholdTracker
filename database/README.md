@@ -144,7 +144,15 @@ above remains the only way migrations reach the deployed database.
   (`'low'`/`'medium'`/`'high'`/`'critical'`, nullable), used to sort
   open-ended tasks to the top of a list. See "Open-ended tasks" in
   `php-app/README.md`'s "Task/chore tracking" section.
+- **Skip a recurring occurrence** (`0012`, issue #12 follow-up): adds
+  `'skipped'` to `household_task_instances.status`'s enum (was
+  `'pending'`/`'done'`) -- a third way to resolve an instance, distinct
+  from completing it or deleting it outright, always paired with a
+  required note explaining why (reuses the existing `completed_at`/
+  `completed_by_user_id`/`notes` columns rather than adding new ones). See
+  "Skipping an occurrence" in `php-app/README.md`'s "Task/chore tracking"
+  section.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations starting at `0012`.
+their own numbered migrations starting at `0013`.

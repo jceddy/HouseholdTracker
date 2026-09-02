@@ -6,6 +6,7 @@
     --color-border: #d8d8e2;
     --color-accent: #3b5bfd;
     --color-accent-text: #ffffff;
+    --color-accent-soft: #e8ecff;
     --color-error: #c0293c;
     --color-success: #1a7f4f;
     color-scheme: light;
@@ -20,6 +21,7 @@
         --color-border: #33333f;
         --color-accent: #7b93ff;
         --color-accent-text: #14141b;
+        --color-accent-soft: #262c4a;
         --color-error: #ff6b7d;
         --color-success: #4fd394;
         color-scheme: dark;
@@ -34,6 +36,7 @@
     --color-border: #33333f;
     --color-accent: #7b93ff;
     --color-accent-text: #14141b;
+    --color-accent-soft: #262c4a;
     --color-error: #ff6b7d;
     --color-success: #4fd394;
     color-scheme: dark;
@@ -105,6 +108,15 @@ main li {
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     padding: 0.6rem 0.8rem;
+}
+
+/* task-due-today - a task instance due today (not overdue, not later),
+   on the household Tasks tab and My Tasks alike -- a lighter touch than
+   the plain-text "OVERDUE" marker overdue tasks already get, since due
+   today isn't a problem yet, just worth noticing at a glance. */
+main li.task-due-today {
+    background: var(--color-accent-soft);
+    border-color: var(--color-accent);
 }
 
 main li .li-actions {
