@@ -835,7 +835,8 @@ if ($path === '/households/tasks' && $method === 'POST') {
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) && $body['due_at'] !== '' ? (string) $body['due_at'] : null,
-            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null
+            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
         );
         respond(201, ['status' => 'ok', 'tasks' => $createdInstances]);
     } catch (NotAHouseholdMemberException $e) {
@@ -860,7 +861,8 @@ if ($path === '/households/tasks/update' && $method === 'POST') {
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) && $body['due_at'] !== '' ? (string) $body['due_at'] : null,
-            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null
+            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
         );
         respond(200, ['status' => 'ok', 'task' => $task]);
     } catch (TaskNotFoundException $e) {

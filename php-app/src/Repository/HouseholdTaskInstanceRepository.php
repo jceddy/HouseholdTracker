@@ -30,13 +30,14 @@ final class HouseholdTaskInstanceRepository
      */
     private const PRIORITY_ORDER_SQL = "FIELD(household_tasks.priority, 'critical', 'high', 'medium', 'low')";
 
-    public function create(int $taskId, ?string $dueAt, ?int $assignedToUserId = null): array
+    public function create(int $taskId, ?string $dueAt, ?int $assignedToUserId = null, ?string $notes = null): array
     {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
-            'INSERT INTO household_task_instances (task_id, due_at, assigned_to_user_id) VALUES (:task_id, :due_at, :assigned_to_user_id)'
+            'INSERT INTO household_task_instances (task_id, due_at, assigned_to_user_id, notes)
+             VALUES (:task_id, :due_at, :assigned_to_user_id, :notes)'
         );
-        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId]);
+        $stmt->execute(['task_id' => $taskId, 'due_at' => $dueAt, 'assigned_to_user_id' => $assignedToUserId, 'notes' => $notes]);
 
         return $this->findById((int) $pdo->lastInsertId());
     }
@@ -123,11 +124,32 @@ final class HouseholdTaskInstanceRepository
         $stmt->execute(['due_at' => $dueAt, 'id' => $id]);
     }
 
+    /**
+     * updateNotes(...) - a direct, explicit set (task/chore tracking's own
+     * follow-up: general notes on a task, not just a resolution reason) --
+     * unlike markDone()'s $notes, a null here really does mean "clear it",
+     * since this is the one method whose whole job is setting notes on
+     * purpose. Works on a pending instance same as a resolved one.
+     */
+    public function updateNotes(int $id, ?string $notes): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE household_task_instances SET notes = :notes WHERE id = :id');
+        $stmt->execute(['notes' => $notes, 'id' => $id]);
+    }
+
+    /**
+     * markDone(...) - `COALESCE(:notes, notes)` rather than a plain
+     * overwrite: completing a task is usually just a click with no notes
+     * of its own, and shouldn't silently wipe out whatever note was
+     * already on the task (see updateNotes()) just because none was given
+     * *this* time. Passing an explicit (even empty-string) note still
+     * replaces it -- only an omitted (null) one preserves what's there.
+     */
     public function markDone(int $id, int $completedByUserId, ?string $notes): void
     {
         $stmt = Connection::get()->prepare(
             "UPDATE household_task_instances
-             SET status = 'done', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = :notes
+             SET status = 'done', completed_at = NOW(), completed_by_user_id = :completed_by_user_id, notes = COALESCE(:notes, notes)
              WHERE id = :id"
         );
         $stmt->execute(['completed_by_user_id' => $completedByUserId, 'notes' => $notes, 'id' => $id]);
@@ -136,9 +158,11 @@ final class HouseholdTaskInstanceRepository
     /**
      * markSkipped(...) - same completed_at/completed_by_user_id/notes
      * columns as markDone() (migration `0012`'s own comment explains why
-     * there's no separate skipped_at/skipped_by_user_id) -- $notes here is
-     * always a real, non-empty explanation, since TaskService::
-     * skipInstance() requires one before ever calling this.
+     * there's no separate skipped_at/skipped_by_user_id) -- but always
+     * overwrites $notes outright, unlike markDone()'s COALESCE-preserve:
+     * $notes here is always a real, non-empty explanation (TaskService::
+     * skipInstance() requires one before ever calling this), and the skip
+     * reason is what matters most once an occurrence is skipped.
      */
     public function markSkipped(int $id, int $skippedByUserId, string $notes): void
     {

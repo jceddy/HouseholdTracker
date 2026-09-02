@@ -536,6 +536,9 @@
         if (dueAtBit) {
             bits.push(dueAtBit);
         }
+        if (task.notes) {
+            bits.push(`note: ${task.notes}`);
+        }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
         }
@@ -650,8 +653,10 @@
     }
 
     // formatFinishedTaskLabel(...) - for the "Show finished today" list:
-    // who resolved it and when, plus -- for a skip -- the required reason,
-    // since that's the whole point of a skip over an outright delete.
+    // who resolved it and when, plus the note either way -- required for a
+    // skip (the whole point of a skip over an outright delete), optional
+    // (and possibly just whatever was already on the task before it was
+    // completed) for a done one.
     function formatFinishedTaskLabel(task) {
         const bits = [task.title];
         const assigneesBit = formatAssigneesBit(task);
@@ -663,7 +668,7 @@
         if (task.status === 'skipped') {
             bits.push(`skipped${actor}${at}${task.notes ? `: ${task.notes}` : ''}`);
         } else {
-            bits.push(`completed${actor}${at}`);
+            bits.push(`completed${actor}${at}${task.notes ? ` — note: ${task.notes}` : ''}`);
         }
         return bits.join(' — ');
     }
@@ -708,6 +713,9 @@
         const dueAtBit = formatDueAtBit(task);
         if (dueAtBit) {
             bits.push(dueAtBit);
+        }
+        if (task.notes) {
+            bits.push(`note: ${task.notes}`);
         }
         if (Number(task.completion_count) > 0) {
             bits.push(`completed ${task.completion_count}x`);
@@ -795,6 +803,14 @@
         descriptionTextarea.maxLength = 2000;
         descriptionLabel.appendChild(descriptionTextarea);
         form.appendChild(descriptionLabel);
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = task.notes || '';
+        notesTextarea.maxLength = 2000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
 
         const assigneeFieldset = document.createElement('fieldset');
         assigneeFieldset.className = 'checkbox-fieldset';
@@ -900,6 +916,7 @@
                     instance_id: task.id,
                     title: titleInput.value,
                     description: descriptionTextarea.value,
+                    notes: notesTextarea.value,
                     assigned_to_user_ids: getCheckedAssigneeIds(assigneesContainer),
                     assignment_mode: modeSelect.value,
                     recurrence_frequency: frequencySelect.value,
@@ -1082,6 +1099,7 @@
                 household_id: currentHouseholdId,
                 title: form.title.value,
                 description: form.description.value,
+                notes: form.notes.value,
                 assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-task-assignees')),
                 assignment_mode: form.assignment_mode.value,
                 recurrence_frequency: form.recurrence_frequency.value,
