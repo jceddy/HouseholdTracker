@@ -453,7 +453,11 @@ page:
 
 Issue #11, using #12's own consolidation recommendation: two related but
 distinct concerns, sharing the task/chore system above rather than each
-growing a bespoke table of their own.
+growing a bespoke table of their own. The Home Improvement tab presents
+them as their own Projects/Maintenance sub-tabs (`web-static/js/main.js`'s
+`activateHiTab()`, the same tab-panel pattern `activateTab()`/
+`activateTopTab()` already use one level up) rather than stacking both
+sections in one panel; pure frontend, no API shape change from that split.
 
 **Home improvement projects** (`home_improvement_projects`, migration
 `0015`) *are* their own entity — a project's status (`"idea"` →

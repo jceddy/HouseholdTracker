@@ -184,82 +184,89 @@
         </div>
 
         <div class="tab-panel" id="tab-panel-home-improvement" role="tabpanel" hidden>
-            <h4>Projects</h4>
-            <ul id="home-improvement-projects-list"></ul>
-            <form id="home-improvement-project-form">
-                <label>Title
-                    <input type="text" id="hi-project-title" name="title" required maxlength="150">
-                </label>
-                <label>Description
-                    <textarea id="hi-project-description" name="description" maxlength="2000"></textarea>
-                </label>
-                <label>Status
-                    <select id="hi-project-status" name="status">
-                        <option value="idea">Idea</option>
-                        <option value="planned">Planned</option>
-                        <option value="in_progress">In progress</option>
-                        <option value="completed">Completed</option>
-                        <option value="abandoned">Abandoned</option>
-                    </select>
-                </label>
-                <label>Estimated cost
-                    <input type="number" id="hi-project-estimated-cost" name="estimated_cost" min="0" step="0.01">
-                </label>
-                <label>Target date
-                    <input type="date" id="hi-project-target-date" name="target_date">
-                </label>
-                <button type="submit">Add project</button>
-                <p id="hi-project-message" class="message" hidden></p>
-            </form>
+            <div class="tabs" role="tablist">
+                <button type="button" class="hi-tab-button" data-hi-tab="projects" role="tab" aria-selected="true">Projects</button>
+                <button type="button" class="hi-tab-button" data-hi-tab="maintenance" role="tab" aria-selected="false">Maintenance</button>
+            </div>
 
-            <div id="home-improvement-project-detail" hidden>
-                <h5 id="hi-project-detail-title"></h5>
-                <p id="hi-project-detail-info"></p>
-                <ul id="hi-project-detail-tasks"></ul>
-                <form id="hi-project-task-form">
+            <div class="hi-tab-panel" id="hi-tab-panel-projects" role="tabpanel">
+                <ul id="home-improvement-projects-list"></ul>
+                <form id="home-improvement-project-form">
                     <label>Title
-                        <input type="text" id="hi-project-task-title" name="title" required maxlength="150">
+                        <input type="text" id="hi-project-title" name="title" required maxlength="150">
+                    </label>
+                    <label>Description
+                        <textarea id="hi-project-description" name="description" maxlength="2000"></textarea>
+                    </label>
+                    <label>Status
+                        <select id="hi-project-status" name="status">
+                            <option value="idea">Idea</option>
+                            <option value="planned">Planned</option>
+                            <option value="in_progress">In progress</option>
+                            <option value="completed">Completed</option>
+                            <option value="abandoned">Abandoned</option>
+                        </select>
+                    </label>
+                    <label>Estimated cost
+                        <input type="number" id="hi-project-estimated-cost" name="estimated_cost" min="0" step="0.01">
+                    </label>
+                    <label>Target date
+                        <input type="date" id="hi-project-target-date" name="target_date">
+                    </label>
+                    <button type="submit">Add project</button>
+                    <p id="hi-project-message" class="message" hidden></p>
+                </form>
+
+                <div id="home-improvement-project-detail" hidden>
+                    <h5 id="hi-project-detail-title"></h5>
+                    <p id="hi-project-detail-info"></p>
+                    <ul id="hi-project-detail-tasks"></ul>
+                    <form id="hi-project-task-form">
+                        <label>Title
+                            <input type="text" id="hi-project-task-title" name="title" required maxlength="150">
+                        </label>
+                        <fieldset class="checkbox-fieldset">
+                            <legend>Assign to</legend>
+                            <div id="hi-project-task-assignees"></div>
+                        </fieldset>
+                        <label>Due date
+                            <input type="date" id="hi-project-task-due-at" name="due_at">
+                        </label>
+                        <button type="submit">Add task</button>
+                        <p id="hi-project-task-message" class="message" hidden></p>
+                    </form>
+                    <button type="button" id="hi-project-detail-close">Close</button>
+                </div>
+            </div>
+
+            <div class="hi-tab-panel" id="hi-tab-panel-maintenance" role="tabpanel" hidden>
+                <ul id="home-improvement-maintenance-list"></ul>
+                <form id="home-improvement-maintenance-form">
+                    <label>Title
+                        <input type="text" id="hi-maintenance-title" name="title" required maxlength="150">
                     </label>
                     <fieldset class="checkbox-fieldset">
                         <legend>Assign to</legend>
-                        <div id="hi-project-task-assignees"></div>
+                        <div id="hi-maintenance-assignees"></div>
                     </fieldset>
-                    <label>Due date
-                        <input type="date" id="hi-project-task-due-at" name="due_at">
+                    <label>Repeats
+                        <select id="hi-maintenance-frequency" name="recurrence_frequency">
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly" selected>Monthly</option>
+                            <option value="annual">Annual</option>
+                        </select>
                     </label>
-                    <button type="submit">Add task</button>
-                    <p id="hi-project-task-message" class="message" hidden></p>
+                    <label>Every
+                        <span class="inline-number-unit">
+                            <input type="number" id="hi-maintenance-interval" name="recurrence_interval" min="1" max="1000" value="1">
+                            <span id="hi-maintenance-interval-unit">month(s)</span>
+                        </span>
+                    </label>
+                    <button type="submit">Add maintenance item</button>
+                    <p id="hi-maintenance-message" class="message" hidden></p>
                 </form>
-                <button type="button" id="hi-project-detail-close">Close</button>
             </div>
-
-            <h4>Maintenance</h4>
-            <ul id="home-improvement-maintenance-list"></ul>
-            <form id="home-improvement-maintenance-form">
-                <label>Title
-                    <input type="text" id="hi-maintenance-title" name="title" required maxlength="150">
-                </label>
-                <fieldset class="checkbox-fieldset">
-                    <legend>Assign to</legend>
-                    <div id="hi-maintenance-assignees"></div>
-                </fieldset>
-                <label>Repeats
-                    <select id="hi-maintenance-frequency" name="recurrence_frequency">
-                        <option value="daily">Daily</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly" selected>Monthly</option>
-                        <option value="annual">Annual</option>
-                    </select>
-                </label>
-                <label>Every
-                    <span class="inline-number-unit">
-                        <input type="number" id="hi-maintenance-interval" name="recurrence_interval" min="1" max="1000" value="1">
-                        <span id="hi-maintenance-interval-unit">month(s)</span>
-                    </span>
-                </label>
-                <button type="submit">Add maintenance item</button>
-                <p id="hi-maintenance-message" class="message" hidden></p>
-            </form>
         </div>
 
         <button id="close-household-detail-button" type="button">Close</button>

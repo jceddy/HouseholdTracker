@@ -149,6 +149,25 @@
         button.addEventListener('click', () => activateTopTab(button.dataset.topTab));
     }
 
+    // activateHiTab(...) - same idea as activateTab()/activateTopTab(), one
+    // level deeper: the Home Improvement tab's own Projects/Maintenance
+    // sections are sub-tab panels. Own class pair (hi-tab-button/
+    // hi-tab-panel) for the same reason activateTopTab() has its own --
+    // switching this sub-tab group never touches the outer household-detail
+    // tabs' aria-selected/hidden state, or vice versa.
+    function activateHiTab(tabName) {
+        for (const button of document.querySelectorAll('.hi-tab-button')) {
+            button.setAttribute('aria-selected', String(button.dataset.hiTab === tabName));
+        }
+        for (const panel of document.querySelectorAll('.hi-tab-panel')) {
+            panel.hidden = panel.id !== `hi-tab-panel-${tabName}`;
+        }
+    }
+
+    for (const button of document.querySelectorAll('.hi-tab-button')) {
+        button.addEventListener('click', () => activateHiTab(button.dataset.hiTab));
+    }
+
     // Re-fetch My Tasks every time it's navigated to, rather than only once
     // at page load -- a task added/completed elsewhere (or by someone else)
     // since the last load otherwise wouldn't show up here without a manual
@@ -165,6 +184,7 @@
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
         activateTab('dashboard');
+        activateHiTab('projects');
         // Reset rather than carry over stale finished-today data (and its
         // "Hide finished today" label) from whichever household was open
         // before this one.
