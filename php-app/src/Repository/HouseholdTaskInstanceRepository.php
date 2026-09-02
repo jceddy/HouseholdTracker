@@ -214,6 +214,39 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
+     * listFinishedToday(...) - the household Tasks tab's "Show finished
+     * today" list: every instance resolved today, completed *or* skipped,
+     * newest first -- the counterpart to listForHousehold()'s pending-only
+     * view, which drops a resolved instance the moment it's no longer
+     * pending. `completed_at >= CURDATE()` rather than wrapping the column
+     * in `DATE(...)` -- reads the same but stays sargable, and
+     * `completed_at` is never in the future so there's no upper bound to
+     * add. Carries `completed_by_username` (who resolved it) alongside the
+     * `assigned_to_username` the other list methods already return, since
+     * a skip's whole point is knowing who skipped it and, via `notes`,
+     * why.
+     */
+    public function listFinishedToday(int $householdId): array
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
+                    household_tasks.assignment_mode, household_tasks.recurrence_frequency, household_tasks.recurrence_interval,
+                    assignee.username AS assigned_to_username, completed_by.username AS completed_by_username
+             FROM household_task_instances
+             INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
+             LEFT JOIN users AS completed_by ON completed_by.id = household_task_instances.completed_by_user_id
+             WHERE household_tasks.household_id = :household_id
+               AND household_task_instances.status IN ('done', 'skipped')
+               AND household_task_instances.completed_at >= CURDATE()
+             ORDER BY household_task_instances.completed_at DESC"
+        );
+        $stmt->execute(['household_id' => $householdId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
      * listAssignedToUser(...) - the "My Tasks" view: every pending instance
      * that is *this user's own to act on* across every household they
      * belong to -- either a shared 'anyone'-mode instance for a task they're

@@ -809,6 +809,17 @@ if ($path === '/households/tasks' && $method === 'GET') {
     }
 }
 
+if ($path === '/households/tasks/finished' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'tasks' => $tasks->listFinishedToday((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/households/tasks' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

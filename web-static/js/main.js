@@ -165,6 +165,11 @@
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
         activateTab('members');
+        // Reset rather than carry over stale finished-today data (and its
+        // "Hide finished today" label) from whichever household was open
+        // before this one.
+        document.getElementById('household-tasks-finished-list').hidden = true;
+        document.getElementById('household-tasks-finished-toggle').textContent = 'Show finished today';
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
@@ -467,6 +472,13 @@
         return !!task.due_at && task.due_at < todayIso;
     }
 
+    // isDueToday(...) - for highlighting a task row -- distinct from
+    // isTaskOverdue() (strictly *before* today), so the two never both
+    // apply to the same task.
+    function isDueToday(task) {
+        return task.due_at === todayIso;
+    }
+
     // formatAssigneesBit(...) - shared by formatTaskLabel()/
     // formatMyTaskLabel(): names the assignee(s), and, only when there's
     // more than one (the only time it's not implied), whether completing
@@ -604,6 +616,9 @@
 
         for (const task of body.tasks) {
             const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -622,6 +637,55 @@
                 });
                 await loadTasks(householdId);
             }));
+            list.appendChild(li);
+        }
+
+        // Keep the "finished today" list in sync whenever it's visible --
+        // loadTasks() is already what every complete/skip/delete/edit-cancel
+        // action reloads after itself, so this is the one place that needs
+        // to know about it.
+        if (!document.getElementById('household-tasks-finished-list').hidden) {
+            await loadFinishedTasksToday(householdId);
+        }
+    }
+
+    // formatFinishedTaskLabel(...) - for the "Show finished today" list:
+    // who resolved it and when, plus -- for a skip -- the required reason,
+    // since that's the whole point of a skip over an outright delete.
+    function formatFinishedTaskLabel(task) {
+        const bits = [task.title];
+        const assigneesBit = formatAssigneesBit(task);
+        if (assigneesBit) {
+            bits.push(assigneesBit);
+        }
+        const actor = task.completed_by_username ? ` by ${task.completed_by_username}` : '';
+        const at = task.completed_at ? ` at ${task.completed_at}` : '';
+        if (task.status === 'skipped') {
+            bits.push(`skipped${actor}${at}${task.notes ? `: ${task.notes}` : ''}`);
+        } else {
+            bits.push(`completed${actor}${at}`);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadFinishedTasksToday(householdId) {
+        const { response, body } = await apiRequest('/households/tasks/finished?household_id=' + householdId);
+        const list = document.getElementById('household-tasks-finished-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing finished today yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of body.tasks) {
+            const { li } = buildListItem(formatFinishedTaskLabel(task));
             list.appendChild(li);
         }
     }
@@ -678,6 +742,9 @@
 
         for (const task of tasks) {
             const { li, actions } = buildListItem(formatMyTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -863,6 +930,18 @@
 
     document.getElementById('my-tasks-show-open-ended').addEventListener('change', renderMyTasks);
     document.getElementById('my-tasks-refresh-button').addEventListener('click', () => loadMyTasks());
+
+    document.getElementById('household-tasks-finished-toggle').addEventListener('click', async (event) => {
+        const list = document.getElementById('household-tasks-finished-list');
+        if (list.hidden) {
+            await loadFinishedTasksToday(currentHouseholdId);
+            list.hidden = false;
+            event.target.textContent = 'Hide finished today';
+        } else {
+            list.hidden = true;
+            event.target.textContent = 'Show finished today';
+        }
+    });
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });

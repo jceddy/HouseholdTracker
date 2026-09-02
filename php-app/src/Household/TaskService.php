@@ -60,6 +60,12 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * on record ("didn't walk the dog -- there was a tornado") -- status
  * `'skipped'`, with a *required* note. One-off tasks can't be skipped
  * (delete instead); see skipInstance()'s own docblock.
+ *
+ * **Viewing finished tasks** (#12's own follow-up): a completed or skipped
+ * instance drops off listTasks()/listMyTasks() the moment it's no longer
+ * pending, same as always -- listFinishedToday() is the household Tasks
+ * tab's separate window into what actually got resolved today (either
+ * way), so that history isn't just invisible once acted on.
  */
 final class TaskService
 {
@@ -81,6 +87,19 @@ final class TaskService
         $this->requireMember($householdId, $callerId);
 
         return $this->attachAssignees($this->instances->listForHousehold($householdId));
+    }
+
+    /**
+     * listFinishedToday(...) - the household Tasks tab's "Show finished
+     * today" list: every instance resolved today, completed or skipped
+     * alike -- see HouseholdTaskInstanceRepository::listFinishedToday()'s
+     * own docblock.
+     */
+    public function listFinishedToday(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->attachAssignees($this->instances->listFinishedToday($householdId));
     }
 
     /**

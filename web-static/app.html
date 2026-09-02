@@ -118,6 +118,10 @@
 
         <div class="tab-panel" id="tab-panel-tasks" role="tabpanel" hidden>
             <ul id="household-tasks-list"></ul>
+            <div class="form-row">
+                <button type="button" id="household-tasks-finished-toggle" class="button--compact">Show finished today</button>
+            </div>
+            <ul id="household-tasks-finished-list" hidden></ul>
             <form id="household-task-form">
                 <label>Title
                     <input type="text" id="household-task-title" name="title" required maxlength="150">
