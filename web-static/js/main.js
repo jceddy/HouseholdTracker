@@ -164,7 +164,7 @@
         // detail panel, it was easy to mistake for part of it and got in the
         // way of the invite form.
         document.getElementById('create-household-section').hidden = true;
-        activateTab('members');
+        activateTab('dashboard');
         // Reset rather than carry over stale finished-today data (and its
         // "Hide finished today" label) from whichever household was open
         // before this one.
@@ -659,6 +659,67 @@
         // to know about it.
         if (!document.getElementById('household-tasks-finished-list').hidden) {
             await loadFinishedTasksToday(householdId);
+        }
+        // Same idea for the Dashboard tab's due-today/overdue lists -- they
+        // derive from this same pending-instance data, so every action that
+        // already reloads the Tasks list keeps the dashboard current too,
+        // regardless of which tab is actually visible right now.
+        await loadDashboard(householdId);
+    }
+
+    // loadDashboard(...) - issue #20's "what's due today" view: the same
+    // pending-instance data loadTasks() shows, split into "due today" and
+    // "overdue" using the same isDueToday()/isTaskOverdue() checks that
+    // already highlight/label rows on the Tasks tab, so nothing here can
+    // disagree with what that tab already shows for the same task. An
+    // open-ended task (no due_at) never matches either bucket, same as it
+    // never gets a due-today highlight or an OVERDUE label there.
+    //
+    // Deliberately reuses GET /households/tasks rather than a new aggregate
+    // endpoint: today this dashboard has exactly one tracker to pull from
+    // (issue #12's tasks), so a dedicated aggregation layer would have
+    // nothing to aggregate yet. Issue #20 also calls for a household
+    // calendar (#13) and overdue maintenance (#11) here -- neither tracker
+    // exists yet, so those sections are left for whichever of those lands
+    // first to add.
+    async function loadDashboard(householdId) {
+        const { response, body } = await apiRequest('/households/tasks?household_id=' + householdId);
+        const dueTodayList = document.getElementById('dashboard-due-today-list');
+        const overdueList = document.getElementById('dashboard-overdue-list');
+        dueTodayList.innerHTML = '';
+        overdueList.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        const dueToday = body.tasks.filter((task) => isDueToday(task));
+        const overdue = body.tasks.filter((task) => isTaskOverdue(task));
+
+        renderDashboardTaskList(dueTodayList, dueToday, 'Nothing due today.', householdId);
+        renderDashboardTaskList(overdueList, overdue, 'Nothing overdue.', householdId);
+    }
+
+    function renderDashboardTaskList(listEl, tasks, emptyMessage, householdId) {
+        if (tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = emptyMessage;
+            listEl.appendChild(li);
+            return;
+        }
+
+        for (const task of tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
+                await apiRequest('/households/tasks/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                // loadTasks() re-renders the Tasks tab's own list and, as
+                // its last step, this dashboard too -- see its own comment.
+                await loadTasks(householdId);
+            }));
+            listEl.appendChild(li);
         }
     }
 

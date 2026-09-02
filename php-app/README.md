@@ -391,6 +391,26 @@ already-fetched list client-side — it re-renders from the last response
 rather than re-fetching, so toggling it never fights with a concurrent
 complete.
 
+**Household dashboard** (issue #20): a "Dashboard" tab, now the default tab
+shown on opening a household (previously Members), splitting the same
+pending instances `GET /households/tasks` already returns into "Due today"
+and "Overdue" lists — no new API route. `web-static/js/main.js`'s
+`loadDashboard()` reuses the existing `isDueToday()`/`isTaskOverdue()`
+checks that already drive the Tasks tab's own highlight/`OVERDUE` label, so
+the dashboard can never disagree with what that tab shows for the same
+task; an open-ended task (no `due_at`) never matches either bucket, same as
+there. Each row gets a Complete action that reloads via `loadTasks()`,
+which — as its last step — also reloads the dashboard, so either tab stays
+in sync regardless of where a task was completed from.
+
+Issue #20 also calls for today's calendar events (issue #13) and overdue
+maintenance (issue #11) to appear here; neither tracker exists yet, so
+those sections are left out rather than stubbed in, and this dashboard
+pulls from tasks alone for now. For the same reason it stays a distinct
+tab rather than becoming the post-login landing page (app.html's household
+list) — the issue's own suggestion is to promote it "once enough trackers
+exist to make it worth showing."
+
 **Not yet wired up**: `source_type`/`source_id` are reserved, unenforced
 columns for a future meeting (issue #8) or home-improvement project (issue
 #11) to link its own tasks into this same system, per issue #12's

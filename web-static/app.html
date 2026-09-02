@@ -48,14 +48,22 @@
         <h3 id="household-detail-name"></h3>
 
         <div class="tabs" role="tablist">
-            <button type="button" class="tab-button" data-tab="members" role="tab" aria-selected="true">Members</button>
+            <button type="button" class="tab-button" data-tab="dashboard" role="tab" aria-selected="true">Dashboard</button>
+            <button type="button" class="tab-button" data-tab="members" role="tab" aria-selected="false">Members</button>
             <button type="button" class="tab-button" data-tab="settings" role="tab" aria-selected="false">Settings</button>
             <button type="button" class="tab-button" data-tab="notes" role="tab" aria-selected="false">Notes</button>
             <button type="button" class="tab-button" data-tab="pets" role="tab" aria-selected="false">Pets</button>
             <button type="button" class="tab-button" data-tab="tasks" role="tab" aria-selected="false">Tasks</button>
         </div>
 
-        <div class="tab-panel" id="tab-panel-members" role="tabpanel">
+        <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
+            <h4>Due today</h4>
+            <ul id="dashboard-due-today-list"></ul>
+            <h4>Overdue</h4>
+            <ul id="dashboard-overdue-list"></ul>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-members" role="tabpanel" hidden>
             <ul id="household-members-list"></ul>
             <form id="invite-form">
                 <label>Invite by username or email
