@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace HouseholdTracker\Household;
 
+use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdTaskInstanceRepository;
 use HouseholdTracker\Repository\HouseholdTaskRepository;
@@ -75,12 +76,25 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * HouseholdTaskInstanceRepository::markDone()'s own docblock) rather than
  * clearing it on a plain "mark done" click; skipInstance()'s note always
  * overwrites, since the skip reason is what matters most from then on.
+ *
+ * **Home improvement projects and maintenance** (issue #11, using #12's own
+ * consolidation recommendation): createTask() can tag a new task with
+ * `source_type`/`source_id` -- a home improvement project's own task
+ * ('home_improvement_project', pointing at that project) or a maintenance
+ * item ('maintenance', a marker with no source_id since it doesn't source
+ * from anything -- it's just a recurring task by definition). See
+ * validateSource() for the full rules. Neither tag changes what a task
+ * *is*; a tagged task still shows up in listTasks()/listMyTasks() same as
+ * any other -- HouseholdTaskInstanceRepository::listForSource()/
+ * listMaintenanceForHousehold() are separate, filtered views onto the same
+ * rows for the Home Improvement tab.
  */
 final class TaskService
 {
     private const RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'monthly', 'annual'];
     private const ASSIGNMENT_MODES = ['anyone', 'everyone'];
     private const PRIORITIES = ['low', 'medium', 'high', 'critical'];
+    private const SOURCE_TYPES = ['home_improvement_project', 'maintenance'];
     private const MAX_RECURRENCE_INTERVAL = 1000;
     private const MAX_NOTES_LENGTH = 2000;
 
@@ -88,6 +102,7 @@ final class TaskService
         private readonly HouseholdMemberRepository $members,
         private readonly HouseholdTaskRepository $tasks,
         private readonly HouseholdTaskInstanceRepository $instances,
+        private readonly HomeImprovementProjectRepository $projects,
     ) {
     }
 
@@ -130,6 +145,16 @@ final class TaskService
      * 'everyone' mode creates one per assignee for this same occurrence
      * (see HouseholdTaskInstanceRepository::create()'s $assignedToUserId).
      *
+     * $sourceType/$sourceId (issue #11's own follow-up) tag this task as
+     * belonging to something other than a plain household chore -- either
+     * a home improvement project's own task ('home_improvement_project',
+     * $sourceId = that project's id) or a maintenance item ('maintenance',
+     * $sourceId always null since it doesn't source from another entity --
+     * see validateSource()). Both null (the default) is an ordinary task,
+     * same as before this follow-up existed. Deliberately not editable via
+     * updateTask() -- once tagged, a task's source doesn't change through
+     * the shared edit form.
+     *
      * @param array<int> $assignedToUserIds
      */
     public function createTask(
@@ -143,7 +168,9 @@ final class TaskService
         ?int $recurrenceInterval,
         ?string $dueAt,
         ?string $priority,
-        ?string $notes = null
+        ?string $notes = null,
+        ?string $sourceType = null,
+        ?int $sourceId = null
     ): array {
         $this->requireMember($householdId, $callerId);
         [$title, $description] = $this->validateTitleAndDescription($title, $description);
@@ -153,12 +180,13 @@ final class TaskService
         $dueAt = $this->validateDueAt($dueAt, $recurrenceFrequency !== null);
         $priority = $this->validatePriority($priority, $recurrenceFrequency === null && $dueAt === null);
         $notes = $this->validateNotes($notes);
+        [$sourceType, $sourceId] = $this->validateSource($householdId, $sourceType, $sourceId, $recurrenceFrequency !== null);
         // start_date is NOT NULL on the definition even for an open-ended
         // task (due_at NULL) -- see HouseholdTaskRepository's own docblock,
         // its value is simply never read for a task cron doesn't process.
         $startDate = $dueAt ?? (new \DateTimeImmutable('today'))->format('Y-m-d');
 
-        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignmentMode, $priority, $recurrenceFrequency, $recurrenceInterval, $startDate);
+        $task = $this->tasks->create($householdId, $callerId, $title, $description, $assignmentMode, $priority, $recurrenceFrequency, $recurrenceInterval, $startDate, $sourceType, $sourceId);
         $this->tasks->replaceAssignees((int) $task['id'], $assignedToUserIds);
 
         $instances = $assignmentMode === 'everyone'
@@ -360,6 +388,63 @@ final class TaskService
         }
 
         return $assignmentMode;
+    }
+
+    /**
+     * validateSource(...) - see createTask()'s own docblock for what
+     * $sourceType/$sourceId mean. Both null together is the ordinary case
+     * (no source at all); otherwise $sourceType decides what $sourceId
+     * must look like:
+     *   - 'home_improvement_project': $sourceId required, and must be a
+     *     real project belonging to *this same household* -- otherwise a
+     *     task could tag itself onto another household's project.
+     *   - 'maintenance': $sourceId must be null (it doesn't source from
+     *     another entity, the tag alone identifies it -- see database/
+     *     migrations/0015_add_home_improvement_projects.sql's own
+     *     comment), and the task must be recurring, since a maintenance
+     *     item *is* "a recurring household_task" by definition (issue
+     *     #11) -- there's no such thing as a one-off maintenance item.
+     *
+     * @return array{0: ?string, 1: ?int}
+     */
+    private function validateSource(int $householdId, ?string $sourceType, ?int $sourceId, bool $isRecurring): array
+    {
+        $sourceType = $sourceType !== null && $sourceType !== '' ? $sourceType : null;
+
+        if ($sourceType === null) {
+            if ($sourceId !== null) {
+                throw new \InvalidArgumentException('source_id requires a source_type.');
+            }
+
+            return [null, null];
+        }
+
+        if (!in_array($sourceType, self::SOURCE_TYPES, true)) {
+            throw new \InvalidArgumentException('source_type must be one of: ' . implode(', ', self::SOURCE_TYPES) . '.');
+        }
+
+        if ($sourceType === 'maintenance') {
+            if ($sourceId !== null) {
+                throw new \InvalidArgumentException('A maintenance task cannot have a source_id.');
+            }
+            if (!$isRecurring) {
+                throw new \InvalidArgumentException('A maintenance task must be recurring.');
+            }
+
+            return ['maintenance', null];
+        }
+
+        // 'home_improvement_project'
+        if ($sourceId === null) {
+            throw new \InvalidArgumentException('source_id is required for a home_improvement_project task.');
+        }
+
+        $project = $this->projects->findById($sourceId);
+        if ($project === null || (int) $project['household_id'] !== $householdId) {
+            throw new ProjectNotFoundException('Project not found.');
+        }
+
+        return ['home_improvement_project', $sourceId];
     }
 
     private function validateTitleAndDescription(string $title, ?string $description): array

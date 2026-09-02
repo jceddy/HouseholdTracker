@@ -30,14 +30,16 @@ final class HouseholdTaskRepository
         ?string $priority,
         ?string $recurrenceFrequency,
         ?int $recurrenceInterval,
-        string $startDate
+        string $startDate,
+        ?string $sourceType = null,
+        ?int $sourceId = null
     ): array {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
             'INSERT INTO household_tasks
-                (household_id, title, description, assignment_mode, priority, recurrence_frequency, recurrence_interval, start_date, created_by_user_id)
+                (household_id, title, description, assignment_mode, priority, recurrence_frequency, recurrence_interval, start_date, source_type, source_id, created_by_user_id)
              VALUES
-                (:household_id, :title, :description, :assignment_mode, :priority, :recurrence_frequency, :recurrence_interval, :start_date, :created_by_user_id)'
+                (:household_id, :title, :description, :assignment_mode, :priority, :recurrence_frequency, :recurrence_interval, :start_date, :source_type, :source_id, :created_by_user_id)'
         );
         $stmt->execute([
             'household_id' => $householdId,
@@ -48,6 +50,8 @@ final class HouseholdTaskRepository
             'recurrence_frequency' => $recurrenceFrequency,
             'recurrence_interval' => $recurrenceInterval,
             'start_date' => $startDate,
+            'source_type' => $sourceType,
+            'source_id' => $sourceId,
             'created_by_user_id' => $createdByUserId,
         ]);
 

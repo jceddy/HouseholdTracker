@@ -20,6 +20,7 @@ use HouseholdTracker\Database\Connection;
 use HouseholdTracker\Database\MigrationRunner;
 use HouseholdTracker\Household\AlreadyMemberException;
 use HouseholdTracker\Household\CannotInviteSelfException;
+use HouseholdTracker\Household\HomeImprovementService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
@@ -27,6 +28,7 @@ use HouseholdTracker\Household\NotAHouseholdMemberException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
 use HouseholdTracker\Household\PetNotFoundException;
+use HouseholdTracker\Household\ProjectNotFoundException;
 use HouseholdTracker\Household\TaskNotFoundException;
 use HouseholdTracker\Household\TaskService;
 use HouseholdTracker\Household\UserNotFoundException;
@@ -34,6 +36,7 @@ use HouseholdTracker\Ledger\Ledger;
 use HouseholdTracker\Mail\Mailer;
 use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
+use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -275,10 +278,20 @@ $households = new HouseholdService(
     new HouseholdPetRepository()
 );
 
+$taskInstances = new HouseholdTaskInstanceRepository();
+$projects = new HomeImprovementProjectRepository();
+
 $tasks = new TaskService(
     new HouseholdMemberRepository(),
     new HouseholdTaskRepository(),
-    new HouseholdTaskInstanceRepository()
+    $taskInstances,
+    $projects
+);
+
+$homeImprovement = new HomeImprovementService(
+    new HouseholdMemberRepository(),
+    $projects,
+    $taskInstances
 );
 
 if ($path === '/register' && $method === 'POST') {
@@ -836,11 +849,15 @@ if ($path === '/households/tasks' && $method === 'POST') {
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) && $body['due_at'] !== '' ? (string) $body['due_at'] : null,
             isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null,
-            isset($body['notes']) ? (string) $body['notes'] : null
+            isset($body['notes']) ? (string) $body['notes'] : null,
+            isset($body['source_type']) && $body['source_type'] !== '' ? (string) $body['source_type'] : null,
+            isset($body['source_id']) && $body['source_id'] !== '' ? (int) $body['source_id'] : null
         );
         respond(201, ['status' => 'ok', 'tasks' => $createdInstances]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (ProjectNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -931,6 +948,101 @@ if ($path === '/households/tasks/skip' && $method === 'POST') {
 if ($path === '/tasks/mine' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     respond(200, ['status' => 'ok', 'tasks' => $tasks->listMyTasks((int) $currentUser['id'])]);
+}
+
+if ($path === '/households/projects' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'projects' => $homeImprovement->listProjects((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/projects/detail' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+
+    try {
+        respond(200, ['status' => 'ok'] + $homeImprovement->getProject((int) $currentUser['id'], (int) ($_GET['project_id'] ?? 0)));
+    } catch (ProjectNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/projects' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $project = $homeImprovement->createProject(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            isset($body['status']) && $body['status'] !== '' ? (string) $body['status'] : null,
+            isset($body['estimated_cost']) && $body['estimated_cost'] !== '' ? (string) $body['estimated_cost'] : null,
+            isset($body['target_date']) && $body['target_date'] !== '' ? (string) $body['target_date'] : null
+        );
+        respond(201, ['status' => 'ok', 'project' => $project]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/projects/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $project = $homeImprovement->updateProject(
+            (int) $currentUser['id'],
+            (int) ($body['project_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            isset($body['status']) && $body['status'] !== '' ? (string) $body['status'] : null,
+            isset($body['estimated_cost']) && $body['estimated_cost'] !== '' ? (string) $body['estimated_cost'] : null,
+            isset($body['actual_cost']) && $body['actual_cost'] !== '' ? (string) $body['actual_cost'] : null,
+            isset($body['target_date']) && $body['target_date'] !== '' ? (string) $body['target_date'] : null
+        );
+        respond(200, ['status' => 'ok', 'project' => $project]);
+    } catch (ProjectNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/projects/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $homeImprovement->deleteProject((int) $currentUser['id'], (int) ($body['project_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (ProjectNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/maintenance' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'tasks' => $homeImprovement->listMaintenance((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // Further household-tracking domain routes (finances, calendar, whatever

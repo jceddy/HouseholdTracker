@@ -238,6 +238,87 @@ final class HouseholdTaskInstanceRepository
     }
 
     /**
+     * listForSource(...) - a home improvement project's (issue #11) own
+     * task list: same "one row per task, soonest-due pending instance"
+     * shape as listForHousehold() (see its own docblock), just filtered to
+     * one project's linked tasks (household_tasks.source_type/source_id)
+     * instead of a whole household. The caller (HomeImprovementService)
+     * has already resolved the project and checked household membership,
+     * so no household_id filter is needed here.
+     */
+    public function listForSource(string $sourceType, int $sourceId): array
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
+                    household_tasks.assignment_mode, household_tasks.priority, household_tasks.recurrence_frequency,
+                    household_tasks.recurrence_interval, assignee.username AS assigned_to_username,
+                    (SELECT COUNT(*) FROM household_task_instances completed
+                        WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
+                    (SELECT MAX(completed.completed_at) FROM household_task_instances completed
+                        WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS last_completed_at
+             FROM household_task_instances
+             INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
+             WHERE household_tasks.source_type = :source_type AND household_tasks.source_id = :source_id
+               AND household_task_instances.status = 'pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM household_task_instances earlier
+                   WHERE earlier.task_id = household_task_instances.task_id
+                     AND earlier.assigned_to_user_id <=> household_task_instances.assigned_to_user_id
+                     AND earlier.status = 'pending'
+                     AND (earlier.due_at < household_task_instances.due_at
+                          OR (earlier.due_at <=> household_task_instances.due_at AND earlier.id < household_task_instances.id))
+               )
+             ORDER BY (household_task_instances.due_at IS NULL) DESC, " . self::PRIORITY_ORDER_SQL . ",
+                      household_task_instances.due_at ASC, household_task_instances.created_at DESC"
+        );
+        $stmt->execute(['source_type' => $sourceType, 'source_id' => $sourceId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * listMaintenanceForHousehold(...) - the Home Improvement tab's
+     * Maintenance schedule (issue #11): same shape/collapsing as
+     * listForHousehold(), filtered to just the recurring tasks tagged
+     * source_type = 'maintenance' (see database/migrations/
+     * 0015_add_home_improvement_projects.sql's own comment on why that
+     * marker alone, with no source_id, is what identifies one). These
+     * tasks also still appear in the ordinary household Tasks tab/
+     * dashboard -- this is a second, filtered view onto the same rows, not
+     * a separate list of separate tasks.
+     */
+    public function listMaintenanceForHousehold(int $householdId): array
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT household_task_instances.*, household_tasks.title, household_tasks.description,
+                    household_tasks.assignment_mode, household_tasks.priority, household_tasks.recurrence_frequency,
+                    household_tasks.recurrence_interval, assignee.username AS assigned_to_username,
+                    (SELECT COUNT(*) FROM household_task_instances completed
+                        WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS completion_count,
+                    (SELECT MAX(completed.completed_at) FROM household_task_instances completed
+                        WHERE completed.task_id = household_tasks.id AND completed.status = 'done') AS last_completed_at
+             FROM household_task_instances
+             INNER JOIN household_tasks ON household_tasks.id = household_task_instances.task_id
+             LEFT JOIN users AS assignee ON assignee.id = household_task_instances.assigned_to_user_id
+             WHERE household_tasks.household_id = :household_id AND household_tasks.source_type = 'maintenance'
+               AND household_task_instances.status = 'pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM household_task_instances earlier
+                   WHERE earlier.task_id = household_task_instances.task_id
+                     AND earlier.assigned_to_user_id <=> household_task_instances.assigned_to_user_id
+                     AND earlier.status = 'pending'
+                     AND (earlier.due_at < household_task_instances.due_at
+                          OR (earlier.due_at <=> household_task_instances.due_at AND earlier.id < household_task_instances.id))
+               )
+             ORDER BY household_task_instances.due_at ASC, household_task_instances.created_at DESC"
+        );
+        $stmt->execute(['household_id' => $householdId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
      * listFinishedToday(...) - the household Tasks tab's "Show finished
      * today" list: every instance resolved today, completed *or* skipped,
      * newest first -- the counterpart to listForHousehold()'s pending-only
