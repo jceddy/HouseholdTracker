@@ -332,6 +332,10 @@ task's list item, in both the household Tasks tab and My Tasks — a
 lighter, at-a-glance visual cue than the "OVERDUE" text marker an
 actually-late task already gets, since due today isn't a problem yet.
 Pure frontend (`isDueToday()` in `web-static/js/main.js`); no API change.
+An actually-overdue task gets its own red `task-overdue` CSS class
+(`isTaskOverdue()`) alongside the existing "OVERDUE" text marker, on the
+household Tasks tab, My Tasks, and the dashboard's "Overdue" section
+alike — same pure-frontend, no-API-change shape as `task-due-today`.
 
 **Editing** (`POST /households/tasks/update`) updates the parent
 definition's title/description/assignees/mode/recurrence *and* moves the

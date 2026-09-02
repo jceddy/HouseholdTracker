@@ -638,6 +638,9 @@
             if (isDueToday(task)) {
                 li.classList.add('task-due-today');
             }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -716,6 +719,12 @@
 
         for (const task of tasks) {
             const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {
                     method: 'POST',
@@ -1125,6 +1134,9 @@
             const { li, actions } = buildListItem(formatMyTaskLabel(task));
             if (isDueToday(task)) {
                 li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
             }
             actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
                 await apiRequest('/households/tasks/complete', {

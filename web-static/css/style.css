@@ -8,6 +8,7 @@
     --color-accent-text: #ffffff;
     --color-accent-soft: #e8ecff;
     --color-error: #c0293c;
+    --color-error-soft: #fbe3e6;
     --color-success: #1a7f4f;
     color-scheme: light;
 }
@@ -23,6 +24,7 @@
         --color-accent-text: #14141b;
         --color-accent-soft: #262c4a;
         --color-error: #ff6b7d;
+        --color-error-soft: #3d2129;
         --color-success: #4fd394;
         color-scheme: dark;
     }
@@ -38,6 +40,7 @@
     --color-accent-text: #14141b;
     --color-accent-soft: #262c4a;
     --color-error: #ff6b7d;
+    --color-error-soft: #3d2129;
     --color-success: #4fd394;
     color-scheme: dark;
 }
@@ -117,6 +120,16 @@ main li {
 main li.task-due-today {
     background: var(--color-accent-soft);
     border-color: var(--color-accent);
+}
+
+/* task-overdue - the red counterpart to task-due-today, for a task whose
+   due date has actually passed: same isTaskOverdue() check that already
+   drives the plain-text "OVERDUE" marker, now also reddening the row
+   itself so an overdue task stands out at a glance, not just on close
+   reading of its label. */
+main li.task-overdue {
+    background: var(--color-error-soft);
+    border-color: var(--color-error);
 }
 
 main li .li-actions {
