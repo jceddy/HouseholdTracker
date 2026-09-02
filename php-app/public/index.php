@@ -809,6 +809,17 @@ if ($path === '/households/tasks' && $method === 'GET') {
     }
 }
 
+if ($path === '/households/tasks/finished' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'tasks' => $tasks->listFinishedToday((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/households/tasks' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
@@ -824,7 +835,8 @@ if ($path === '/households/tasks' && $method === 'POST') {
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) && $body['due_at'] !== '' ? (string) $body['due_at'] : null,
-            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null
+            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
         );
         respond(201, ['status' => 'ok', 'tasks' => $createdInstances]);
     } catch (NotAHouseholdMemberException $e) {
@@ -849,7 +861,8 @@ if ($path === '/households/tasks/update' && $method === 'POST') {
             isset($body['recurrence_frequency']) && $body['recurrence_frequency'] !== '' ? (string) $body['recurrence_frequency'] : null,
             isset($body['recurrence_interval']) && $body['recurrence_interval'] !== '' ? (int) $body['recurrence_interval'] : null,
             isset($body['due_at']) && $body['due_at'] !== '' ? (string) $body['due_at'] : null,
-            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null
+            isset($body['priority']) && $body['priority'] !== '' ? (string) $body['priority'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
         );
         respond(200, ['status' => 'ok', 'task' => $task]);
     } catch (TaskNotFoundException $e) {
@@ -884,6 +897,26 @@ if ($path === '/households/tasks/complete' && $method === 'POST') {
             (int) $currentUser['id'],
             (int) ($body['instance_id'] ?? 0),
             isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'task' => $task]);
+    } catch (TaskNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/tasks/skip' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $task = $tasks->skipInstance(
+            (int) $currentUser['id'],
+            (int) ($body['instance_id'] ?? 0),
+            (string) ($body['notes'] ?? '')
         );
         respond(200, ['status' => 'ok', 'task' => $task]);
     } catch (TaskNotFoundException $e) {

@@ -21,8 +21,9 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
 // per task small for the rare very-short-interval one.
 const LOOKAHEAD_DAYS = 7;
 
-// How long a pending instance nobody ever completed, or a completed one,
-// sticks around before the cleanup pass below removes it.
+// How long a pending instance nobody ever completed, or a resolved one
+// (completed or skipped), sticks around before the cleanup pass below
+// removes it.
 const RETENTION_DAYS = 90;
 
 $tasks = new HouseholdTaskRepository();
@@ -63,9 +64,9 @@ foreach ($tasks->listAllRecurring() as $task) {
 }
 echo "Generated {$generated} new task instance(s).\n";
 
-$purgedDone = $instances->purgeDoneOlderThan(RETENTION_DAYS);
+$purgedResolved = $instances->purgeResolvedOlderThan(RETENTION_DAYS);
 $purgedExpired = $instances->purgeExpiredPendingOlderThan(RETENTION_DAYS);
-echo "Purged {$purgedDone} old completed instance(s) and {$purgedExpired} old never-completed instance(s) (older than " . RETENTION_DAYS . " days).\n";
+echo "Purged {$purgedResolved} old completed/skipped instance(s) and {$purgedExpired} old never-completed instance(s) (older than " . RETENTION_DAYS . " days).\n";
 
 $purgedOrphans = $tasks->deleteOrphanedOneOffTasks();
 echo "Deleted {$purgedOrphans} orphaned one-off task definition(s) with no remaining instances.\n";
