@@ -46,14 +46,24 @@ plain DDL statements (no stored procedures/triggers), and if a migration
 seeds data, make sure none of the values contain a literal semicolon —
 `bin/migrate.php` splits files on `;`.
 
-**Every migration that changes the schema must also bump the root
-[`VERSION`](../VERSION) file, and must end with an `UPDATE schema_version
-SET version = 'X.Y.Z' WHERE id = 1;` matching that same bump** (see
-`MaintenanceGate` in `php-app/README.md`). This must be the file's **last
-statement** — MySQL/InnoDB DDL isn't transactional, so a partial/failed run
-needs to leave `schema_version` still reporting the *old* version (keeping
-the app in maintenance mode) rather than falsely reporting the new one
-against a half-migrated schema.
+**Every merged change bumps the root [`VERSION`](../VERSION) file, whether
+or not it touches the schema — see "Versioning" in the top-level README —
+and every migration must end with an `UPDATE schema_version SET version =
+'X.Y.Z' WHERE id = 1;` matching that same bump** (see `MaintenanceGate` in
+`php-app/README.md`). This must be the file's **last statement** —
+MySQL/InnoDB DDL isn't transactional, so a partial/failed run needs to
+leave `schema_version` still reporting the *old* version (keeping the app
+in maintenance mode) rather than falsely reporting the new one against a
+half-migrated schema.
+
+A change with no schema change of its own still needs a migration file to
+carry the bump, since `VERSION` and `schema_version` must always match
+exactly — a **version-only migration** whose sole statement is that same
+`UPDATE schema_version ...` (see `0013_dashboard_version_bump.sql` for an
+example). It's still a real migration for `MigrationRunner`/`schema_
+migrations`' purposes, and gets a real, permanent filename in this
+directory even though it alters nothing — same immutable-once-merged rule
+as any other.
 
 ## Auto-applying migrations on deploy
 
