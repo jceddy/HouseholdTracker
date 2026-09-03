@@ -93,6 +93,18 @@ main section {
     margin-bottom: 2rem;
 }
 
+/* [hidden] - an author stylesheet rule always beats the browser's own
+   `[hidden] { display: none }` UA rule, regardless of specificity. Every
+   other `hidden`-toggled element in the app is a section/div/p/label with
+   no unconditional `display:` of its own, so it never ran into this -- but
+   `main ul` below gives every <ul> `display: flex` unconditionally, which
+   silently defeated `hidden` on the one <ul> (the finished-today list)
+   that toggles it directly. Restated here, explicitly, so it can't happen
+   again for any future hidden-toggled element either. */
+[hidden] {
+    display: none;
+}
+
 main ul {
     list-style: none;
     padding: 0;
