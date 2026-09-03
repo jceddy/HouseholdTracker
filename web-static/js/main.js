@@ -947,11 +947,16 @@
         }
 
         currentProjectId = projectId;
-        document.getElementById('home-improvement-project-detail').hidden = false;
+        const detail = document.getElementById('home-improvement-project-detail');
+        detail.hidden = false;
         document.getElementById('hi-project-detail-title').textContent = body.project.title;
         document.getElementById('hi-project-detail-info').textContent = formatProjectLabel(body.project);
         renderProjectDetailTasks(body.tasks, householdId);
         populateAssigneeCheckboxes(document.getElementById('hi-project-task-assignees'));
+        // The panel sits right below the project list, but on a long list it
+        // can still open off-screen -- without this, clicking "View tasks"
+        // can look like it did nothing.
+        detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function closeProjectDetail() {
