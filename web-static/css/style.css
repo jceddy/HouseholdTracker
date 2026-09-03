@@ -8,6 +8,7 @@
     --color-accent-text: #ffffff;
     --color-accent-soft: #e8ecff;
     --color-error: #c0293c;
+    --color-error-soft: #fbe3e6;
     --color-success: #1a7f4f;
     color-scheme: light;
 }
@@ -23,6 +24,7 @@
         --color-accent-text: #14141b;
         --color-accent-soft: #262c4a;
         --color-error: #ff6b7d;
+        --color-error-soft: #3d2129;
         --color-success: #4fd394;
         color-scheme: dark;
     }
@@ -38,6 +40,7 @@
     --color-accent-text: #14141b;
     --color-accent-soft: #262c4a;
     --color-error: #ff6b7d;
+    --color-error-soft: #3d2129;
     --color-success: #4fd394;
     color-scheme: dark;
 }
@@ -119,6 +122,16 @@ main li.task-due-today {
     border-color: var(--color-accent);
 }
 
+/* task-overdue - the red counterpart to task-due-today, for a task whose
+   due date has actually passed: same isTaskOverdue() check that already
+   drives the plain-text "OVERDUE" marker, now also reddening the row
+   itself so an overdue task stands out at a glance, not just on close
+   reading of its label. */
+main li.task-overdue {
+    background: var(--color-error-soft);
+    border-color: var(--color-error);
+}
+
 main li .li-actions {
     display: flex;
     gap: 0.4rem;
@@ -168,6 +181,14 @@ form {
     margin-top: 1rem;
 }
 
+#home-improvement-project-detail {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
+}
+
 .tabs {
     display: flex;
     flex-wrap: wrap;
@@ -177,7 +198,8 @@ form {
 }
 
 button.tab-button,
-button.top-tab-button {
+button.top-tab-button,
+button.hi-tab-button {
     background: none;
     color: var(--color-muted);
     font-weight: 600;
@@ -189,19 +211,22 @@ button.top-tab-button {
 }
 
 button.tab-button:hover,
-button.top-tab-button:hover {
+button.top-tab-button:hover,
+button.hi-tab-button:hover {
     color: var(--color-text);
     background: var(--color-surface);
 }
 
 button.tab-button[aria-selected="true"],
-button.top-tab-button[aria-selected="true"] {
+button.top-tab-button[aria-selected="true"],
+button.hi-tab-button[aria-selected="true"] {
     color: var(--color-accent);
     border-bottom-color: var(--color-accent);
 }
 
 .tab-panel,
-.top-tab-panel {
+.top-tab-panel,
+.hi-tab-panel {
     margin-bottom: 2rem;
 }
 
