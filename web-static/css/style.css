@@ -94,15 +94,17 @@ main section {
 }
 
 /* [hidden] - an author stylesheet rule always beats the browser's own
-   `[hidden] { display: none }` UA rule, regardless of specificity. Every
-   other `hidden`-toggled element in the app is a section/div/p/label with
-   no unconditional `display:` of its own, so it never ran into this -- but
-   `main ul` below gives every <ul> `display: flex` unconditionally, which
-   silently defeated `hidden` on the one <ul> (the finished-today list)
-   that toggles it directly. Restated here, explicitly, so it can't happen
-   again for any future hidden-toggled element either. */
+   `[hidden] { display: none }` UA rule, regardless of specificity. This
+   bit twice already: `main ul` giving every <ul> `display: flex`
+   unconditionally silently defeated `hidden` on the finished-today list
+   (the one <ul> that toggles it directly), and then `#undo-toast`'s own
+   `display: flex` did the same to itself -- an ID selector beats this
+   rule's plain attribute selector regardless of source order, same trap,
+   one specificity tier higher. `!important` here instead of chasing every
+   future element's own `display:` with a `:not([hidden])` override --
+   `hidden` should always just mean invisible. */
 [hidden] {
-    display: none;
+    display: none !important;
 }
 
 main ul {
