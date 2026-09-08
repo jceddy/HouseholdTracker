@@ -35,12 +35,15 @@ API requests routed to the PHP app under `/app`).
 
 ## Version indicator
 
-Every page has a `<footer>` with an `#app-version` span, populated by a
+Every page has a `<footer>` with an `#app-version` link, populated by a
 snippet in `js/app.js` that fetches `/VERSION` — a plain static text file
 deployed alongside `index.html` — and renders it as e.g. "v0.1.0". Fetched
 with `cache: 'no-store'` so a page loaded shortly after a deploy can't
 keep showing a stale, browser-cached version string. See "Versioning" in
-the top-level README.
+the top-level README. The link itself points at the GitHub repo
+(`https://github.com/jceddy/HouseholdTracker`); `#app-version` in
+`css/style.css` keeps it looking like the surrounding muted footer text
+until hovered, rather than the default link color `a` gets elsewhere.
 
 ## Support
 
