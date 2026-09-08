@@ -62,6 +62,79 @@
         return button;
     }
 
+    let undoToastTimeoutId = null;
+
+    // showUndoToast(...) - a brief bottom-of-screen toast with an "Undo"
+    // button, auto-dismissing after 5 seconds. Built once and reused (not
+    // recreated per call) so a second toast while one's already showing
+    // just replaces the message/handler and restarts the timer, rather
+    // than stacking multiple toasts on screen.
+    function showUndoToast(message, onUndo) {
+        let toast = document.getElementById('undo-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'undo-toast';
+            toast.hidden = true;
+
+            const messageEl = document.createElement('span');
+            messageEl.id = 'undo-toast-message';
+            toast.appendChild(messageEl);
+
+            const undoButton = document.createElement('button');
+            undoButton.type = 'button';
+            undoButton.id = 'undo-toast-button';
+            undoButton.textContent = 'Undo';
+            toast.appendChild(undoButton);
+
+            document.body.appendChild(toast);
+        }
+
+        clearTimeout(undoToastTimeoutId);
+        document.getElementById('undo-toast-message').textContent = message;
+
+        // Replaced (not just re-listened-on) so a still-pending click
+        // handler from a previous toast can never fire alongside this one.
+        const oldButton = document.getElementById('undo-toast-button');
+        const undoButton = oldButton.cloneNode(true);
+        oldButton.replaceWith(undoButton);
+        undoButton.addEventListener('click', async () => {
+            clearTimeout(undoToastTimeoutId);
+            toast.hidden = true;
+            await onUndo();
+        });
+
+        toast.hidden = false;
+        undoToastTimeoutId = setTimeout(() => {
+            toast.hidden = true;
+        }, 5000);
+    }
+
+    // completeTaskWithUndo(...) - the shared "Complete" button behavior
+    // reused by every task list in the app (Tasks tab, Dashboard, a
+    // project's task list, Maintenance, My Tasks): mark the instance done,
+    // reload whatever list(s) it came from, then offer a 5-second "Undo"
+    // toast for a misclick -- completing is a single click with no
+    // confirmation step, unlike Delete elsewhere in the app. The instance
+    // is genuinely marked done server-side right away (other household
+    // members see it immediately, same as any other change here), and
+    // "Undo" is a real un-complete call, not just a delayed complete.
+    function completeTaskWithUndo(task, reload) {
+        return async () => {
+            await apiRequest('/households/tasks/complete', {
+                method: 'POST',
+                body: JSON.stringify({ instance_id: task.id }),
+            });
+            await reload();
+            showUndoToast(`"${task.title}" completed.`, async () => {
+                await apiRequest('/households/tasks/uncomplete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await reload();
+            });
+        };
+    }
+
     async function loadInvites() {
         const { response, body } = await apiRequest('/households/invites');
         const list = document.getElementById('invites-list');
@@ -661,13 +734,7 @@
             if (isTaskOverdue(task)) {
                 li.classList.add('task-overdue');
             }
-            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                await apiRequest('/households/tasks/complete', {
-                    method: 'POST',
-                    body: JSON.stringify({ instance_id: task.id }),
-                });
-                await loadTasks(householdId);
-            }));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, () => loadTasks(householdId))));
             if (task.recurrence_frequency) {
                 actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadTasks(householdId))));
             }
@@ -745,15 +812,9 @@
             if (isTaskOverdue(task)) {
                 li.classList.add('task-overdue');
             }
-            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                await apiRequest('/households/tasks/complete', {
-                    method: 'POST',
-                    body: JSON.stringify({ instance_id: task.id }),
-                });
-                // loadTasks() re-renders the Tasks tab's own list and, as
-                // its last step, this dashboard too -- see its own comment.
-                await loadTasks(householdId);
-            }));
+            // loadTasks() re-renders the Tasks tab's own list and, as its
+            // last step, this dashboard too -- see its own comment.
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, () => loadTasks(householdId))));
             listEl.appendChild(li);
         }
     }
@@ -988,14 +1049,10 @@
             if (isTaskOverdue(task)) {
                 li.classList.add('task-overdue');
             }
-            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                await apiRequest('/households/tasks/complete', {
-                    method: 'POST',
-                    body: JSON.stringify({ instance_id: task.id }),
-                });
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, async () => {
                 await loadProjects(householdId);
                 await loadTasks(householdId);
-            }));
+            })));
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, async () => {
                 await loadProjects(householdId);
                 await loadTasks(householdId);
@@ -1043,14 +1100,10 @@
             if (isTaskOverdue(task)) {
                 li.classList.add('task-overdue');
             }
-            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                await apiRequest('/households/tasks/complete', {
-                    method: 'POST',
-                    body: JSON.stringify({ instance_id: task.id }),
-                });
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, async () => {
                 await loadMaintenance(householdId);
                 await loadTasks(householdId);
-            }));
+            })));
             actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, async () => {
                 await loadMaintenance(householdId);
                 await loadTasks(householdId);
@@ -1175,13 +1228,7 @@
             if (isTaskOverdue(task)) {
                 li.classList.add('task-overdue');
             }
-            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', async () => {
-                await apiRequest('/households/tasks/complete', {
-                    method: 'POST',
-                    body: JSON.stringify({ instance_id: task.id }),
-                });
-                await loadMyTasks();
-            }));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, () => loadMyTasks())));
             if (task.recurrence_frequency) {
                 actions.appendChild(buildIconButton(SKIP_ICON, 'Skip', () => renderSkipForm(li, task, () => loadMyTasks())));
             }

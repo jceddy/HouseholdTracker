@@ -345,6 +345,39 @@ a {
     color: var(--color-success);
 }
 
+/* #undo-toast - the brief "Undo" affordance after completing a task (see
+   main.js's showUndoToast()), fixed to the bottom of the viewport so it's
+   visible regardless of scroll position. No box-shadow used anywhere else
+   in the app, but this is the first floating-over-content element -- needs
+   one for visual separation from whatever's underneath it. */
+#undo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.5rem;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    max-width: calc(100vw - 2rem);
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    z-index: 100;
+}
+
+#undo-toast-message {
+    font-size: 0.9rem;
+}
+
+#undo-toast-button {
+    flex-shrink: 0;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
 footer {
     display: flex;
     justify-content: center;
