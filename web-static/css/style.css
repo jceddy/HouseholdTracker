@@ -355,6 +355,19 @@ footer {
     color: var(--color-muted);
 }
 
+/* #app-version is a link (to the GitHub repo) rather than plain text, but
+   should still read as the same muted footer text until hovered -- `a`
+   below otherwise wins over the inherited footer color regardless of
+   selector order, since it targets the element directly. */
+#app-version {
+    color: inherit;
+    text-decoration: none;
+}
+
+#app-version:hover {
+    text-decoration: underline;
+}
+
 footer select {
     font: inherit;
     background: var(--color-surface);
