@@ -174,6 +174,26 @@ final class HouseholdTaskInstanceRepository
         $stmt->execute(['completed_by_user_id' => $skippedByUserId, 'notes' => $notes, 'id' => $id]);
     }
 
+    /**
+     * markPending(...) - the undo side of markDone()/markSkipped(): puts a
+     * completed or skipped instance back the way it was before, for the
+     * brief "Undo" window on the Complete button (TaskService::
+     * uncompleteInstance()) rather than making the user delete-and-recreate
+     * a misclick. Clears completed_at/completed_by_user_id along with
+     * status -- leaving them set on a 'pending' row would misrepresent who
+     * "completed" a task nobody has completed. Notes are left alone, same
+     * as markDone()'s own preserve-don't-clear stance.
+     */
+    public function markPending(int $id): void
+    {
+        $stmt = Connection::get()->prepare(
+            "UPDATE household_task_instances
+             SET status = 'pending', completed_at = NULL, completed_by_user_id = NULL
+             WHERE id = :id"
+        );
+        $stmt->execute(['id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM household_task_instances WHERE id = :id');

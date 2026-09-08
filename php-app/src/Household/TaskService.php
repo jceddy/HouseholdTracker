@@ -288,6 +288,30 @@ final class TaskService
     }
 
     /**
+     * uncompleteInstance(...) - the undo side of completeInstance(), for
+     * the Complete button's brief "Undo" toast (a misclick recovery, not a
+     * general "reopen a finished task" feature): puts the instance back to
+     * 'pending'. Only valid from 'done' -- a skip has its own required-note
+     * semantics completeInstance() doesn't, so undoing a skip back to
+     * pending would silently discard that note's reason without ever
+     * showing it to the person clicking Undo; skipping is deliberate enough
+     * (it requires typing a reason) that a misclick there is far less
+     * likely anyway.
+     */
+    public function uncompleteInstance(int $callerId, int $instanceId): array
+    {
+        $instance = $this->requireMemberForInstance($callerId, $instanceId);
+
+        if ($instance['status'] !== 'done') {
+            throw new \InvalidArgumentException('Only a completed task can be un-completed.');
+        }
+
+        $this->instances->markPending($instanceId);
+
+        return $this->attachAssignees([$this->instances->findByIdWithTaskInfo($instanceId)])[0];
+    }
+
+    /**
      * skipInstance(...) - "this occurrence isn't happening" for a recurring
      * chore ("didn't walk the dog -- there was a tornado"), distinct from
      * completeInstance() (it wasn't done) and deleteInstance() (it still

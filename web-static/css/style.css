@@ -94,15 +94,17 @@ main section {
 }
 
 /* [hidden] - an author stylesheet rule always beats the browser's own
-   `[hidden] { display: none }` UA rule, regardless of specificity. Every
-   other `hidden`-toggled element in the app is a section/div/p/label with
-   no unconditional `display:` of its own, so it never ran into this -- but
-   `main ul` below gives every <ul> `display: flex` unconditionally, which
-   silently defeated `hidden` on the one <ul> (the finished-today list)
-   that toggles it directly. Restated here, explicitly, so it can't happen
-   again for any future hidden-toggled element either. */
+   `[hidden] { display: none }` UA rule, regardless of specificity. This
+   bit twice already: `main ul` giving every <ul> `display: flex`
+   unconditionally silently defeated `hidden` on the finished-today list
+   (the one <ul> that toggles it directly), and then `#undo-toast`'s own
+   `display: flex` did the same to itself -- an ID selector beats this
+   rule's plain attribute selector regardless of source order, same trap,
+   one specificity tier higher. `!important` here instead of chasing every
+   future element's own `display:` with a `:not([hidden])` override --
+   `hidden` should always just mean invisible. */
 [hidden] {
-    display: none;
+    display: none !important;
 }
 
 main ul {
@@ -345,6 +347,39 @@ a {
     color: var(--color-success);
 }
 
+/* #undo-toast - the brief "Undo" affordance after completing a task (see
+   main.js's showUndoToast()), fixed to the bottom of the viewport so it's
+   visible regardless of scroll position. No box-shadow used anywhere else
+   in the app, but this is the first floating-over-content element -- needs
+   one for visual separation from whatever's underneath it. */
+#undo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.5rem;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    max-width: calc(100vw - 2rem);
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    z-index: 100;
+}
+
+#undo-toast-message {
+    font-size: 0.9rem;
+}
+
+#undo-toast-button {
+    flex-shrink: 0;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
 footer {
     display: flex;
     justify-content: center;
@@ -353,6 +388,19 @@ footer {
     padding: 1.5rem;
     font-size: 0.8rem;
     color: var(--color-muted);
+}
+
+/* #app-version is a link (to the GitHub repo) rather than plain text, but
+   should still read as the same muted footer text until hovered -- `a`
+   below otherwise wins over the inherited footer color regardless of
+   selector order, since it targets the element directly. */
+#app-version {
+    color: inherit;
+    text-decoration: none;
+}
+
+#app-version:hover {
+    text-decoration: underline;
 }
 
 footer select {
