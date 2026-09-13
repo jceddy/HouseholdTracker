@@ -34,7 +34,7 @@ database.
     (`AuthService`) plus its exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
-    issue #24) plus its exceptions; `TaskService`/`RecurrenceCalculator`
+    issue #24; staples — issue #66) plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11).
   - `Repository/` — Thin PDO data-access classes, one per table.
@@ -103,6 +103,12 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/shopping-list/purchase` | `{"item_id"}`                        | Requires auth. `404` if no such item; `403` if the caller isn't a member of its household. Any member may mark any item purchased — a shared household resource, not a per-user one, same as pets. Returns `{"item"}`. |
 | POST   | `/households/shopping-list/unpurchase` | `{"item_id"}`                      | Requires auth. Same `404`/`403` rules as `/purchase`. The undo side of it — puts the item back to needed (clearing `purchased_at`/`purchased_by_user_id`), for a misclick rather than delete-and-re-add. Returns `{"item"}`. |
 | POST   | `/households/shopping-list/delete` | `{"item_id"}`                            | Requires auth. Same `404`/`403` rules as `/purchase`. |
+| GET    | `/households/staples`     | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every staple in the household, flagged-as-needing-restock first then alphabetical. Returns `{"staples": [{"id","household_id","name","category","needs_restock","flagged_by_user_id","flagged_at","created_at"}]}`. |
+| POST   | `/households/staples`     | `{"household_id", "name", "category"?}`            | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category` (free text, like the shopping list's): ≤50 chars. `400` on any validation failure. Returns `{"item"}`. |
+| POST   | `/households/staples/flag` | `{"item_id"}`                                     | Requires auth. `404` if no such staple; `403` if the caller isn't a member of its household. Any member may flag any staple — a shared household resource, same as pets/the shopping list. Returns `{"item"}`. |
+| POST   | `/households/staples/unflag` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. Clears `needs_restock`/`flagged_by_user_id`/`flagged_at`. Returns `{"item"}`. |
+| POST   | `/households/staples/delete` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. |
+| POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household and clears their flags. Returns `{"items": [...]}` (the newly-created shopping items, possibly empty). |
 | GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. One row per task in the household (per assignee, for an `"everyone"`-mode task's concurrent copies) — the single soonest-due *pending* instance, not every instance cron may have generated (see "Task/chore tracking" below). Returns `{"tasks": [{"id","task_id","household_id","title","description","assignment_mode","priority","assigned_to_user_id","assigned_to_username","assignees","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's; `assigned_to_user_id`/`assigned_to_username` are *this instance's own* assignee (only ever set for one of an `'everyone'`-mode task's per-assignee copies, see "Task/chore tracking" below), `assignees` is the full `[{"id","username"}, ...]` list for the parent task regardless of mode; `due_at` is `null` for an open-ended task (see "Open-ended tasks" below), ordered ahead of every dated instance, highest `priority` first. |
 | GET    | `/households/tasks/finished` | query param `household_id`                      | Requires auth; `403` if the caller isn't a member. Every instance resolved *today* in the household, completed or skipped alike, newest first — the household Tasks tab's "Show finished today" list, the counterpart to `GET /households/tasks` above (which drops a resolved instance the moment it's no longer pending). Same joined row shape, plus `completed_by_username` (who resolved it — set for both `"done"` and `"skipped"`). |
 | POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "notes"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?, "priority"?: "low"\|"medium"\|"high"\|"critical", "source_type"?: "home_improvement_project"\|"maintenance", "source_id"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `notes` (≤2000 chars, like `description`) seeds the created instance's own notes — general notes on this occurrence, not tied to completing/skipping it (see "Notes on a task" below); every id in `assigned_to_user_ids` must be a member of the household; `assignment_mode` defaults to `"anyone"` and must be `"everyone"` only with at least one assignee (`400` otherwise); `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at`, if given, must be `YYYY-MM-DD` (`400` otherwise); omitted for a *recurring* task it defaults to today (still needs a real anchor date), omitted for a *one-off* task it's left `null` — an open-ended task with no deadline (see "Open-ended tasks" below). `priority` only really matters for an open-ended task (defaults to `"medium"` there if not given) — stored as given otherwise, `400` if not one of the four values. `source_type`/`source_id` (issue #11's own follow-up) tag this task as a home improvement project's own task (`source_type = "home_improvement_project"`, `source_id` a real project in this same household — `404` otherwise) or a maintenance item (`source_type = "maintenance"`, `source_id` omitted, and `recurrence_frequency` required — `400` otherwise); omit both for an ordinary task, unchanged from before this follow-up. See "Home improvement projects and maintenance" below. `400` on any other validation failure. Creates the definition *and* its first instance(s) in one call — one shared instance for `"anyone"` mode, one per assignee for `"everyone"` mode (all sharing the same initial `notes`, if given). Returns `{"tasks": [...]}` (an *array*, since `"everyone"` mode can create more than one instance — each in the same joined shape as the list above). |
@@ -229,10 +235,37 @@ first, a "did we already get that" glance-back, not a full purchase
 history — nothing prunes older purchased rows the way cron prunes old task
 instances, so this cap is the only thing keeping that query bounded).
 
-Two things explicitly deferred past v1 (both open questions on issue #24
+One thing explicitly deferred past v1 (an open question on issue #24
 itself): no link to a future #9 (spending) transaction when an item is
-purchased, and no recurring/favorites template for quick re-adding a staple
-item — plain add-each-time is fine until either becomes a real complaint.
+purchased — that stays entirely separate for now. The other open question,
+a recurring/favorites concept for quick re-adding a staple item, shipped
+separately as its own feature (issue #66) — see "Household staples list"
+below.
+
+## Household staples list
+
+A standing checklist of "things we always keep stocked" (issue #66) —
+`household_staple_items`, same "shared resource, no privacy tiers"
+permission model as pets/the shopping list above, and a deliberately
+separate table from `household_shopping_items` rather than a flag on it: a
+staple is a definition that gets checked repeatedly (is this running low?),
+while a shopping-list item is a one-off "need to buy this" that disappears
+once purchased.
+
+`needs_restock` is the actual checklist state — false normally, flipped to
+true when a member checks the pantry/fridge and finds an item running low
+or out (`POST .../staples/flag`, recording who/when in
+`flagged_by_user_id`/`flagged_at`), and back to false either manually
+(`POST .../staples/unflag` — "never mind, we still have some") or
+automatically once it's been copied onto the real shopping list.
+
+`POST /households/staples/add-to-shopping-list` is the actual point of the
+feature: it takes every currently-flagged staple in the household, creates
+a matching `household_shopping_items` row for each (via
+`HouseholdShoppingItemRepository::create()` — the exact same path
+`createShoppingItem()` above uses), and clears their flags so they aren't
+copied over again next time. Checking the pantry and flagging what's low,
+then clicking this once, is the whole intended workflow.
 
 ## Task/chore tracking
 
