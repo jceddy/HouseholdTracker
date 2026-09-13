@@ -170,6 +170,15 @@ above remains the only way migrations reach the deployed database.
   maintenance (the recurring counterpart) -- it's just a recurring
   `household_task` tagged `source_type = 'maintenance'`. See "Home
   improvement projects and maintenance" in `php-app/README.md`.
+- **Household shopping list** (`0023`, issue #24): `household_shopping_
+  items` -- a single shared checklist per household, same no-privacy-tiers
+  permission model as `household_pets`. `quantity`/`category` are both
+  free-text and nullable rather than numeric/enum. `purchased_by_user_id`
+  uses `ON DELETE SET NULL` (like `household_task_instances.
+  completed_by_user_id`), not `CASCADE` like every other `_user_id` column
+  here -- deleting the user who happened to check an item off shouldn't
+  delete the item itself. See "Household shopping list" in
+  `php-app/README.md`.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as

@@ -263,6 +263,9 @@
         // before this one.
         document.getElementById('household-tasks-finished-list').hidden = true;
         document.getElementById('household-tasks-finished-toggle').textContent = 'Show finished today';
+        // Same idea for the shopping list's "Show recently purchased" toggle.
+        document.getElementById('household-shopping-purchased-list').hidden = true;
+        document.getElementById('household-shopping-purchased-toggle').textContent = 'Show recently purchased';
         // Same idea for a still-open project detail panel from whichever
         // household was open before this one.
         closeProjectDetail();
@@ -272,6 +275,7 @@
         await loadTasks(householdId);
         await loadProjects(householdId);
         await loadMaintenance(householdId);
+        await loadShoppingList(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -1167,6 +1171,83 @@
         }
     }
 
+    // Shopping list (issue #24): a single shared checklist per household --
+    // GET /households/shopping-list returns both `needed` and
+    // `recently_purchased` in one call, so both render every load; only the
+    // purchased section's own visibility is toggled (same "Show finished
+    // today" idea the Tasks tab uses, but no separate lazy-fetch needed
+    // here since the data's already in hand either way).
+    function formatShoppingItemLabel(item) {
+        const bits = [item.name];
+        if (item.quantity) {
+            bits.push(item.quantity);
+        }
+        if (item.category) {
+            bits.push(item.category);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadShoppingList(householdId) {
+        const { response, body } = await apiRequest('/households/shopping-list?household_id=' + householdId);
+        const neededList = document.getElementById('household-shopping-needed-list');
+        const purchasedList = document.getElementById('household-shopping-purchased-list');
+        neededList.innerHTML = '';
+        purchasedList.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.needed.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing needed right now.';
+            neededList.appendChild(li);
+        }
+        for (const item of body.needed) {
+            const { li, actions } = buildListItem(formatShoppingItemLabel(item));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Mark purchased', async () => {
+                await apiRequest('/households/shopping-list/purchase', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/shopping-list/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            neededList.appendChild(li);
+        }
+
+        if (body.recently_purchased.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing purchased recently.';
+            purchasedList.appendChild(li);
+        }
+        for (const item of body.recently_purchased) {
+            const { li, actions } = buildListItem(formatShoppingItemLabel(item));
+            actions.appendChild(buildButton('Move back to list', async () => {
+                await apiRequest('/households/shopping-list/unpurchase', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/shopping-list/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            purchasedList.appendChild(li);
+        }
+    }
+
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to. Still shows the assignee bit (unlike before the
@@ -1532,6 +1613,44 @@
             list.hidden = true;
             event.target.textContent = 'Show finished today';
         }
+    });
+
+    document.getElementById('household-shopping-purchased-toggle').addEventListener('click', (event) => {
+        const list = document.getElementById('household-shopping-purchased-list');
+        if (list.hidden) {
+            list.hidden = false;
+            event.target.textContent = 'Hide recently purchased';
+        } else {
+            list.hidden = true;
+            event.target.textContent = 'Show recently purchased';
+        }
+    });
+
+    document.getElementById('household-shopping-item-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-shopping-item-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/shopping-list', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                quantity: form.quantity.value,
+                category: form.category.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadShoppingList(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add item.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
     });
 
     document.getElementById('logout-button').addEventListener('click', async () => {

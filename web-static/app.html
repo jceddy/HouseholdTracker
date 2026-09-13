@@ -55,6 +55,7 @@
             <button type="button" class="tab-button" data-tab="pets" role="tab" aria-selected="false">Pets</button>
             <button type="button" class="tab-button" data-tab="tasks" role="tab" aria-selected="false">Tasks</button>
             <button type="button" class="tab-button" data-tab="home-improvement" role="tab" aria-selected="false">Home Improvement</button>
+            <button type="button" class="tab-button" data-tab="shopping-list" role="tab" aria-selected="false">Shopping List</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -268,6 +269,27 @@
                     <p id="hi-maintenance-message" class="message" hidden></p>
                 </form>
             </div>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-shopping-list" role="tabpanel" hidden>
+            <ul id="household-shopping-needed-list"></ul>
+            <form id="household-shopping-item-form">
+                <label>Item
+                    <input type="text" id="household-shopping-item-name" name="name" required maxlength="150">
+                </label>
+                <label>Quantity
+                    <input type="text" id="household-shopping-item-quantity" name="quantity" maxlength="50" placeholder="e.g. 2 lbs">
+                </label>
+                <label>Category
+                    <input type="text" id="household-shopping-item-category" name="category" maxlength="50" placeholder="e.g. Produce">
+                </label>
+                <button type="submit">Add item</button>
+                <p id="household-shopping-item-message" class="message" hidden></p>
+            </form>
+            <div class="form-row">
+                <button type="button" id="household-shopping-purchased-toggle" class="button--compact">Show recently purchased</button>
+            </div>
+            <ul id="household-shopping-purchased-list" hidden></ul>
         </div>
 
         <button id="close-household-detail-button" type="button">Close</button>
