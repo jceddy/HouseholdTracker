@@ -1253,7 +1253,7 @@
     // stocked", distinct from the one-off shopping list above -- flagging
     // one "needs restock" here doesn't remove it from this list (unlike
     // buying a shopping-list item), since a staple keeps getting checked
-    // again next time. "Add checked items to shopping list" is what
+    // again next time. "Add flagged items to shopping list" is what
     // actually turns a flagged staple into something to go buy.
     function formatStapleLabel(item) {
         const bits = [item.name];
