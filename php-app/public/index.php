@@ -29,6 +29,8 @@ use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
 use HouseholdTracker\Household\PetNotFoundException;
 use HouseholdTracker\Household\ProjectNotFoundException;
+use HouseholdTracker\Household\ShoppingItemNotFoundException;
+use HouseholdTracker\Household\StapleItemNotFoundException;
 use HouseholdTracker\Household\TaskNotFoundException;
 use HouseholdTracker\Household\TaskService;
 use HouseholdTracker\Household\UserNotFoundException;
@@ -42,6 +44,8 @@ use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
+use HouseholdTracker\Repository\HouseholdShoppingItemRepository;
+use HouseholdTracker\Repository\HouseholdStapleItemRepository;
 use HouseholdTracker\Repository\HouseholdTaskInstanceRepository;
 use HouseholdTracker\Repository\HouseholdTaskRepository;
 use HouseholdTracker\Repository\PasswordResetRepository;
@@ -275,7 +279,9 @@ $households = new HouseholdService(
     new HouseholdInviteRepository(),
     new UserRepository(),
     new HouseholdNoteRepository(),
-    new HouseholdPetRepository()
+    new HouseholdPetRepository(),
+    new HouseholdShoppingItemRepository(),
+    new HouseholdStapleItemRepository()
 );
 
 $taskInstances = new HouseholdTaskInstanceRepository();
@@ -806,6 +812,166 @@ if ($path === '/households/pets/delete' && $method === 'POST') {
         respond(200, ['status' => 'ok']);
     } catch (PetNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/shopping-list' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok'] + $households->listShoppingList((int) $currentUser['id'], $householdId));
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/shopping-list' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->createShoppingItem(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['quantity']) ? (string) $body['quantity'] : null,
+            isset($body['category']) ? (string) $body['category'] : null
+        );
+        respond(201, ['status' => 'ok', 'item' => $item]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/shopping-list/purchase' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->purchaseShoppingItem((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'item' => $item]);
+    } catch (ShoppingItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/shopping-list/unpurchase' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->unpurchaseShoppingItem((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'item' => $item]);
+    } catch (ShoppingItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/shopping-list/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteShoppingItem((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (ShoppingItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'staples' => $households->listStaples((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->createStaple(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['category']) ? (string) $body['category'] : null
+        );
+        respond(201, ['status' => 'ok', 'item' => $item]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples/flag' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->flagStapleNeedsRestock((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'item' => $item]);
+    } catch (StapleItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples/unflag' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $households->unflagStapleNeedsRestock((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'item' => $item]);
+    } catch (StapleItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteStaple((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (StapleItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/staples/add-to-shopping-list' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $items = $households->addNeedingRestockStaplesToShoppingList(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0)
+        );
+        respond(200, ['status' => 'ok', 'items' => $items]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }

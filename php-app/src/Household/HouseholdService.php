@@ -9,17 +9,20 @@ use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
+use HouseholdTracker\Repository\HouseholdShoppingItemRepository;
+use HouseholdTracker\Repository\HouseholdStapleItemRepository;
 use HouseholdTracker\Repository\UserRepository;
 
 /**
  * Household creation, membership, the invite flow (issues #5, #33), and
- * household-scoped settings/notes/pets (issue #7). A user may belong to any
- * number of households (household_members has no uniqueness constraint on
- * user_id alone). Invites target either an existing registered user (looked
- * up by username then email, mirroring AuthService::register()'s own
- * validation order) or, if neither matches and the input is a valid email
- * address, an unregistered one -- that invite doubles as a registration link
- * (see inviteMember()/linkPendingInvitesForEmail()).
+ * household-scoped settings/notes/pets/shopping list/staples (issues #7,
+ * #24, #66). A user may belong to any number of households
+ * (household_members has no uniqueness constraint on user_id alone).
+ * Invites target either an existing registered user (looked up by username
+ * then email, mirroring AuthService::register()'s own validation order) or,
+ * if neither matches and the input is a valid email address, an
+ * unregistered one -- that invite doubles as a registration link (see
+ * inviteMember()/linkPendingInvitesForEmail()).
  */
 final class HouseholdService
 {
@@ -30,6 +33,8 @@ final class HouseholdService
         private readonly UserRepository $users,
         private readonly HouseholdNoteRepository $notes,
         private readonly HouseholdPetRepository $pets,
+        private readonly HouseholdShoppingItemRepository $shoppingItems,
+        private readonly HouseholdStapleItemRepository $staples,
     ) {
     }
 
@@ -319,6 +324,199 @@ final class HouseholdService
     {
         $pet = $this->requireMemberForPet($callerId, $petId);
         $this->pets->delete((int) $pet['id']);
+    }
+
+    /**
+     * listShoppingList(...) - "needed" and "recently purchased" split into
+     * two arrays here rather than one caller-side filter, the same shape
+     * TaskService::completeInstance() etc. hand back a single list for --
+     * but here the two are genuinely different queries/orderings (oldest-
+     * added-first vs newest-purchased-first, see the repository), so it's
+     * cheaper and clearer to return both up front.
+     */
+    public function listShoppingList(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return [
+            'needed' => $this->shoppingItems->listNeeded($householdId),
+            'recently_purchased' => $this->shoppingItems->listRecentlyPurchased($householdId),
+        ];
+    }
+
+    /**
+     * createShoppingItem(...)/purchaseShoppingItem(...)/
+     * unpurchaseShoppingItem(...)/deleteShoppingItem(...) - a shared
+     * household resource like pets, not a per-user one: any member may add,
+     * buy, un-buy (a misclick's "Undo", same idea as the task Complete
+     * button's own undo), or remove any item.
+     */
+    public function createShoppingItem(
+        int $callerId,
+        int $householdId,
+        string $name,
+        ?string $quantity,
+        ?string $category
+    ): array {
+        $this->requireMember($householdId, $callerId);
+        [$name, $quantity, $category] = $this->validateShoppingItemInput($name, $quantity, $category);
+
+        return $this->shoppingItems->create($householdId, $callerId, $name, $quantity, $category);
+    }
+
+    public function purchaseShoppingItem(int $callerId, int $itemId): array
+    {
+        $item = $this->requireMemberForShoppingItem($callerId, $itemId);
+        $this->shoppingItems->markPurchased((int) $item['id'], $callerId);
+
+        return $this->shoppingItems->findById((int) $item['id']);
+    }
+
+    public function unpurchaseShoppingItem(int $callerId, int $itemId): array
+    {
+        $item = $this->requireMemberForShoppingItem($callerId, $itemId);
+        $this->shoppingItems->markNeeded((int) $item['id']);
+
+        return $this->shoppingItems->findById((int) $item['id']);
+    }
+
+    public function deleteShoppingItem(int $callerId, int $itemId): void
+    {
+        $item = $this->requireMemberForShoppingItem($callerId, $itemId);
+        $this->shoppingItems->delete((int) $item['id']);
+    }
+
+    private function requireMemberForShoppingItem(int $callerId, int $itemId): array
+    {
+        $item = $this->shoppingItems->findById($itemId);
+        if ($item === null) {
+            throw new ShoppingItemNotFoundException('Shopping list item not found.');
+        }
+
+        $this->requireMember((int) $item['household_id'], $callerId);
+
+        return $item;
+    }
+
+    private function validateShoppingItemInput(string $name, ?string $quantity, ?string $category): array
+    {
+        $name = trim($name);
+        if ($name === '' || strlen($name) > 150) {
+            throw new \InvalidArgumentException('Item name must be 1-150 characters.');
+        }
+
+        $quantity = $quantity !== null ? trim($quantity) : null;
+        $quantity = $quantity === '' ? null : $quantity;
+        if ($quantity !== null && strlen($quantity) > 50) {
+            throw new \InvalidArgumentException('Quantity must be 50 characters or fewer.');
+        }
+
+        $category = $category !== null ? trim($category) : null;
+        $category = $category === '' ? null : $category;
+        if ($category !== null && strlen($category) > 50) {
+            throw new \InvalidArgumentException('Category must be 50 characters or fewer.');
+        }
+
+        return [$name, $quantity, $category];
+    }
+
+    /**
+     * listStaples(...)/createStaple(...)/flagStapleNeedsRestock(...)/
+     * unflagStapleNeedsRestock(...)/deleteStaple(...) - a shared household
+     * resource like pets/the shopping list: any member may add, flag/unflag,
+     * or remove any staple. Distinct from the shopping list itself (issue
+     * #24/#65) -- a staple is a standing "thing we always keep stocked"
+     * definition that gets checked repeatedly, not a one-off "need to buy
+     * this" entry.
+     */
+    public function listStaples(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->staples->listAll($householdId);
+    }
+
+    public function createStaple(int $callerId, int $householdId, string $name, ?string $category): array
+    {
+        $this->requireMember($householdId, $callerId);
+        [$name, $category] = $this->validateStapleInput($name, $category);
+
+        return $this->staples->create($householdId, $name, $category);
+    }
+
+    public function flagStapleNeedsRestock(int $callerId, int $itemId): array
+    {
+        $item = $this->requireMemberForStaple($callerId, $itemId);
+        $this->staples->flagNeedsRestock((int) $item['id'], $callerId);
+
+        return $this->staples->findById((int) $item['id']);
+    }
+
+    public function unflagStapleNeedsRestock(int $callerId, int $itemId): array
+    {
+        $item = $this->requireMemberForStaple($callerId, $itemId);
+        $this->staples->unflagNeedsRestock((int) $item['id']);
+
+        return $this->staples->findById((int) $item['id']);
+    }
+
+    public function deleteStaple(int $callerId, int $itemId): void
+    {
+        $item = $this->requireMemberForStaple($callerId, $itemId);
+        $this->staples->delete((int) $item['id']);
+    }
+
+    /**
+     * addNeedingRestockStaplesToShoppingList(...) - the actual point of the
+     * staples checklist: turn every currently-flagged staple into a real
+     * shopping-list item (issue #66), then clear its flag so it doesn't get
+     * copied over again next time. Returns the newly-created shopping items.
+     */
+    public function addNeedingRestockStaplesToShoppingList(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        $created = [];
+        foreach ($this->staples->listNeedingRestock($householdId) as $staple) {
+            $created[] = $this->shoppingItems->create(
+                $householdId,
+                $callerId,
+                (string) $staple['name'],
+                null,
+                $staple['category'] !== null ? (string) $staple['category'] : null
+            );
+            $this->staples->unflagNeedsRestock((int) $staple['id']);
+        }
+
+        return $created;
+    }
+
+    private function requireMemberForStaple(int $callerId, int $itemId): array
+    {
+        $item = $this->staples->findById($itemId);
+        if ($item === null) {
+            throw new StapleItemNotFoundException('Staple item not found.');
+        }
+
+        $this->requireMember((int) $item['household_id'], $callerId);
+
+        return $item;
+    }
+
+    private function validateStapleInput(string $name, ?string $category): array
+    {
+        $name = trim($name);
+        if ($name === '' || strlen($name) > 150) {
+            throw new \InvalidArgumentException('Item name must be 1-150 characters.');
+        }
+
+        $category = $category !== null ? trim($category) : null;
+        $category = $category === '' ? null : $category;
+        if ($category !== null && strlen($category) > 50) {
+            throw new \InvalidArgumentException('Category must be 50 characters or fewer.');
+        }
+
+        return [$name, $category];
     }
 
     private function requireMemberForPet(int $callerId, int $petId): array

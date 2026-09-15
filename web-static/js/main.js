@@ -263,6 +263,9 @@
         // before this one.
         document.getElementById('household-tasks-finished-list').hidden = true;
         document.getElementById('household-tasks-finished-toggle').textContent = 'Show finished today';
+        // Same idea for the shopping list's "Show recently purchased" toggle.
+        document.getElementById('household-shopping-purchased-list').hidden = true;
+        document.getElementById('household-shopping-purchased-toggle').textContent = 'Show recently purchased';
         // Same idea for a still-open project detail panel from whichever
         // household was open before this one.
         closeProjectDetail();
@@ -272,6 +275,8 @@
         await loadTasks(householdId);
         await loadProjects(householdId);
         await loadMaintenance(householdId);
+        await loadShoppingList(householdId);
+        await loadStaples(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -1167,6 +1172,146 @@
         }
     }
 
+    // Shopping list (issue #24): a single shared checklist per household --
+    // GET /households/shopping-list returns both `needed` and
+    // `recently_purchased` in one call, so both render every load; only the
+    // purchased section's own visibility is toggled (same "Show finished
+    // today" idea the Tasks tab uses, but no separate lazy-fetch needed
+    // here since the data's already in hand either way).
+    function formatShoppingItemLabel(item) {
+        const bits = [item.name];
+        if (item.quantity) {
+            bits.push(item.quantity);
+        }
+        if (item.category) {
+            bits.push(item.category);
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadShoppingList(householdId) {
+        const { response, body } = await apiRequest('/households/shopping-list?household_id=' + householdId);
+        const neededList = document.getElementById('household-shopping-needed-list');
+        const purchasedList = document.getElementById('household-shopping-purchased-list');
+        neededList.innerHTML = '';
+        purchasedList.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.needed.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing needed right now.';
+            neededList.appendChild(li);
+        }
+        for (const item of body.needed) {
+            const { li, actions } = buildListItem(formatShoppingItemLabel(item));
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Mark purchased', async () => {
+                await apiRequest('/households/shopping-list/purchase', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/shopping-list/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            neededList.appendChild(li);
+        }
+
+        if (body.recently_purchased.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing purchased recently.';
+            purchasedList.appendChild(li);
+        }
+        for (const item of body.recently_purchased) {
+            const { li, actions } = buildListItem(formatShoppingItemLabel(item));
+            actions.appendChild(buildButton('Move back to list', async () => {
+                await apiRequest('/households/shopping-list/unpurchase', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/shopping-list/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadShoppingList(householdId);
+            }));
+            purchasedList.appendChild(li);
+        }
+    }
+
+    // Staples (issue #66): a standing checklist of "things we always keep
+    // stocked", distinct from the one-off shopping list above -- flagging
+    // one "needs restock" here doesn't remove it from this list (unlike
+    // buying a shopping-list item), since a staple keeps getting checked
+    // again next time. "Add flagged items to shopping list" is what
+    // actually turns a flagged staple into something to go buy.
+    function formatStapleLabel(item) {
+        const bits = [item.name];
+        if (item.category) {
+            bits.push(item.category);
+        }
+        if (item.needs_restock) {
+            bits.push('NEEDS RESTOCK');
+        }
+        return bits.join(' — ');
+    }
+
+    async function loadStaples(householdId) {
+        const { response, body } = await apiRequest('/households/staples?household_id=' + householdId);
+        const list = document.getElementById('household-staples-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.staples.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No staples added yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const item of body.staples) {
+            const { li, actions } = buildListItem(formatStapleLabel(item));
+            if (item.needs_restock) {
+                actions.appendChild(buildButton('In stock now', async () => {
+                    await apiRequest('/households/staples/unflag', {
+                        method: 'POST',
+                        body: JSON.stringify({ item_id: item.id }),
+                    });
+                    await loadStaples(householdId);
+                }));
+            } else {
+                actions.appendChild(buildButton('Flag low', async () => {
+                    await apiRequest('/households/staples/flag', {
+                        method: 'POST',
+                        body: JSON.stringify({ item_id: item.id }),
+                    });
+                    await loadStaples(householdId);
+                }));
+            }
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/staples/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadStaples(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to. Still shows the assignee bit (unlike before the
@@ -1532,6 +1677,95 @@
             list.hidden = true;
             event.target.textContent = 'Show finished today';
         }
+    });
+
+    document.getElementById('household-shopping-purchased-toggle').addEventListener('click', (event) => {
+        const list = document.getElementById('household-shopping-purchased-list');
+        if (list.hidden) {
+            list.hidden = false;
+            event.target.textContent = 'Hide recently purchased';
+        } else {
+            list.hidden = true;
+            event.target.textContent = 'Show recently purchased';
+        }
+    });
+
+    document.getElementById('household-shopping-item-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-shopping-item-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/shopping-list', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                quantity: form.quantity.value,
+                category: form.category.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadShoppingList(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add item.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-staple-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-staple-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/staples', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                category: form.category.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadStaples(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add staple.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-staples-add-to-shopping-list').addEventListener('click', async () => {
+        const messageEl = document.getElementById('household-staples-bulk-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/staples/add-to-shopping-list', {
+            method: 'POST',
+            body: JSON.stringify({ household_id: currentHouseholdId }),
+        });
+
+        if (!response.ok) {
+            messageEl.textContent = (body && body.message) || 'Could not add items to the shopping list.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+            return;
+        }
+
+        await loadStaples(currentHouseholdId);
+        await loadShoppingList(currentHouseholdId);
+        messageEl.textContent = body.items.length === 0
+            ? 'No staples were flagged as needing restock.'
+            : `Added ${body.items.length} item(s) to the shopping list.`;
+        messageEl.className = 'message';
+        messageEl.hidden = false;
     });
 
     document.getElementById('logout-button').addEventListener('click', async () => {
