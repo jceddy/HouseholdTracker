@@ -34,7 +34,8 @@ database.
     (`AuthService`) plus its exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
-    issue #24; staples — issue #66) plus its exceptions; `TaskService`/`RecurrenceCalculator`
+    issue #24; staples — issue #66; roles and permissions — issue #17)
+    plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11).
   - `Repository/` — Thin PDO data-access classes, one per table.
@@ -88,8 +89,9 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/invite`      | `{"household_id", "username_or_email"}`            | Requires auth; `403` if the caller isn't a member. Looks up the target by username, then email; if neither matches but the input is itself a valid email address, invites that address instead — the invite doubles as a registration link (see "Household invites" below). `404` if no account matches and the input isn't a valid email either, `409` if already a member/already has a pending invite (existing-user or email invite alike), `409` if inviting yourself, `502` if the invitation email can't be sent (rolled back so you can retry). |
 | GET    | `/households/invites`     | —                                                  | Requires auth. The caller's own pending invites: `{"invites": [{"id","household_id","household_name","invited_by_user_id","invited_by_username","created_at"}]}`. |
 | POST   | `/households/invites/respond` | `{"invite_id", "action": "accept"\|"decline"}` | Requires auth. `404` if there's no such pending invite addressed to the caller. Accepting adds them as a `member`. |
-| POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else. |
-| POST   | `/households/settings`    | `{"household_id", "name"}`                        | Requires auth; `403` if the caller isn't a member. Renames the household (1-100 chars, `400` otherwise) — see "Household settings, notes, and pets" below. Returns `{"household"}`. |
+| POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else — see "Household roles and permissions" below. |
+| POST   | `/households/settings`    | `{"household_id", "name"}`                        | Requires auth; `403` if the caller isn't a member — any member, not just the owner, see "Household roles and permissions" below. Renames the household (1-100 chars, `400` otherwise) — see "Household settings, notes, and pets" below. Returns `{"household"}`. |
+| POST   | `/households/delete`      | `{"household_id"}`                                | Requires auth; `403` if the caller isn't a member, or is a member but not the `owner`. Deletes the household outright — every household-scoped table's own `household_id` foreign key cascades from it (see `database/README.md`'s schema overview), so there's nothing else to clean up. See "Household roles and permissions" below. |
 | GET    | `/households/notes`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every `public` note in the household plus the caller's own `private` ones — never another member's private notes. Returns `{"notes": [{"id","household_id","author_user_id","author_username","visibility","body","created_at","updated_at"}]}`. |
 | POST   | `/households/notes`       | `{"household_id", "visibility": "private"\|"public", "body"}` | Requires auth; `403` if the caller isn't a member. `body`: 1-20,000 chars, `400` otherwise. Returns `{"note"}`. |
 | POST   | `/households/notes/update` | `{"note_id", "visibility", "body"}`               | Requires auth. `404` if no such note; `403` unless the caller is the note's own author (public notes included — see below). |
@@ -184,10 +186,56 @@ uses for a failed verification email.
 
 Any member can invite someone else or remove themselves (leave); removing
 a *different* member requires being the household's `owner` — see
-`HouseholdService::removeMember()`. There's no ownership-transfer story
-yet (tracked in issue #17's own broader roles/permissions work), so for
-now an owner can also leave their own household unchallenged, same as any
-member.
+"Household roles and permissions" below for the full matrix this is part
+of.
+
+## Household roles and permissions
+
+`household_members.role` (`owner`/`member`, from issue #5) gated nothing
+beyond membership itself until issue #17 settled which actions actually
+need more than "is this person a member at all":
+
+- **Owner-only**: removing a *different* member (`HouseholdService::
+  removeMember()`), and deleting the household outright (`deleteHousehold()`,
+  `POST /households/delete`) — a new capability this issue adds, not just
+  a permission check on an existing one. Both go through a shared
+  `requireOwner(int $householdId, int $userId, string $message)` guard,
+  alongside the existing `requireMember()`, throwing a single
+  `NotHouseholdOwnerException` (403) with an action-specific message
+  rather than each action inventing its own exception.
+- **Any member**: inviting someone else, leaving the household yourself,
+  editing household settings (issue #7), and every tracker's own
+  create/edit/delete (notes, pets, tasks, the shopping list, staples, home
+  improvement projects). These were already implemented this way before
+  #17 — this issue is a decision that they *stay* that way, not a change:
+  a household is a small, trusted, collaborative group, and restricting
+  everyday actions to the owner alone would just be friction with no
+  concrete need behind it yet. Revisit per-action if a real need shows up,
+  rather than restricting pre-emptively.
+
+Open questions from issue #17, settled for v1:
+
+- **Ownership is singular and non-transferable.** Whoever created the
+  household is its one `owner` for as long as it exists; there's no
+  transfer/shared-ownership flow. An owner can still leave (or delete
+  their whole account, see "Account management" above) unchallenged, same
+  as any member — no "last owner" special case blocks it. A real
+  ownership-transfer story is its own future issue if households ever
+  outlive their original creator's involvement in practice.
+- **Owner/member is enough — no third tier.** No "admin" role short of
+  full ownership exists; add one only once a concrete need for a
+  middle tier shows up, rather than speculatively.
+- **No per-tracker permission overrides.** Every tracker uses the same
+  household-level owner/member split (in practice, "any member" for
+  everything of theirs) rather than its own bespoke permission model —
+  e.g. a future budget tracker (#9) doesn't get its own "who can edit this"
+  concept independent of the matrix above unless a real need for one
+  surfaces.
+
+Whatever household-scoped feature comes next should point back to this
+matrix rather than deciding its own permission model from scratch — "any
+member" unless there's a specific, stated reason it needs to be
+owner-only.
 
 ## Household settings, notes, and pets
 

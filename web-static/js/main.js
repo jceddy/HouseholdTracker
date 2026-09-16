@@ -289,12 +289,17 @@
         const { response, body } = await apiRequest('/households/members?household_id=' + householdId);
         const list = document.getElementById('household-members-list');
         list.innerHTML = '';
+        // Reset before the fetch resolves, not just on success below -- a
+        // failed load shouldn't leave the previous household's "Delete
+        // household" section visible for one that hasn't confirmed it yet.
+        document.getElementById('household-delete-section').hidden = true;
 
         if (!response.ok) {
             return;
         }
 
         const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
+        document.getElementById('household-delete-section').hidden = !isOwner;
         currentMembers = body.members;
         populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
         populateAssigneeCheckboxes(document.getElementById('hi-maintenance-assignees'));
@@ -1836,6 +1841,27 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save settings.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-delete-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const messageEl = document.getElementById('household-delete-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/delete', {
+            method: 'POST',
+            body: JSON.stringify({ household_id: currentHouseholdId }),
+        });
+
+        if (response.ok) {
+            closeHouseholdDetail();
+            await loadHouseholds();
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not delete household.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });

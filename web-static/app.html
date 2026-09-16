@@ -85,6 +85,19 @@
                 <button type="submit">Save</button>
                 <p id="household-settings-message" class="message" hidden></p>
             </form>
+
+            <div id="household-delete-section" hidden>
+                <h4>Delete household</h4>
+                <p>This permanently deletes this household and everything in it -- members, notes, pets, tasks, the shopping list, staples, home improvement projects -- for every member, not just you. This cannot be undone.</p>
+                <form id="household-delete-form">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="household-delete-confirm" required>
+                        I understand this cannot be undone
+                    </label>
+                    <button type="submit">Delete household</button>
+                    <p id="household-delete-message" class="message" hidden></p>
+                </form>
+            </div>
         </div>
 
         <div class="tab-panel" id="tab-panel-notes" role="tabpanel" hidden>

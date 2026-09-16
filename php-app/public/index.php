@@ -26,7 +26,7 @@ use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
-use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
+use HouseholdTracker\Household\NotHouseholdOwnerException;
 use HouseholdTracker\Household\PetNotFoundException;
 use HouseholdTracker\Household\ProjectNotFoundException;
 use HouseholdTracker\Household\ShoppingItemNotFoundException;
@@ -658,7 +658,7 @@ if ($path === '/households/members/remove' && $method === 'POST') {
         respond(200, ['status' => 'ok']);
     } catch (NotAHouseholdMemberException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
-    } catch (NotAuthorizedToRemoveMemberException $e) {
+    } catch (NotHouseholdOwnerException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
@@ -678,6 +678,18 @@ if ($path === '/households/settings' && $method === 'POST') {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteHousehold((int) $currentUser['id'], (int) ($body['household_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (NotAHouseholdMemberException | NotHouseholdOwnerException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
