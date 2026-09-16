@@ -31,7 +31,9 @@ database.
 - `public/` — Web server document root / front controller.
 - `src/` — Application source (PSR-4 autoloaded under `HouseholdTracker\`).
   - `Auth/` — Registration, login, session, and password reset logic
-    (`AuthService`) plus its exceptions.
+    (`AuthService`), account profile/password/deletion management (issue
+    #18) and data export (`AccountExportService`, issue #21), plus their
+    exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
     issue #24; staples — issue #66; roles and permissions — issue #17)
@@ -83,6 +85,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/account/update`         | `{"username"?, "email"?}`                          | Requires auth. Either field may be omitted to leave it alone; a value equal to the caller's current one is a no-op. `username`: same 3-32 char rules as `/register`, `409` if taken. `email`: same valid-format rule, but doesn't take effect immediately — stashed as `pending_email` and emailed a verification link (same flow as `/register`'s), `409` if another account already has it. `400` on validation failure. Returns `{"user"}` (with the new `pending_email` if an email change was requested), `502` if the verification email fails to send (the username half, if any, is not rolled back). See "Account management" below. |
 | POST   | `/account/change-password` | `{"current_password", "new_password"}`            | Requires auth. `401` if `current_password` is wrong; `400` if `new_password` fails the same 8-72 char rule as `/register`. Deletes every one of the account's sessions, current one included, same as `/reset-password` — the frontend sends the user back to the login page. |
 | POST   | `/account/delete`         | `{"password"}`                                     | Requires auth. `401` if `password` is wrong. Deletes the account; see "Account management" below for what that cascades into. |
+| GET    | `/account/export`         | —                                                  | Requires auth. Everything the caller themselves has access to, as one JSON document — see "Data export" below for exactly what's included. Returns `{"export": {...}}`. |
 | GET    | `/chat/models`            | —                                                  | Requires auth. Lists the model keys `POST /chat` accepts (`{"models": [string], "default_model": string}`) — see `ModelCatalog`. |
 | POST   | `/chat`                   | `{"messages": [{"role","content"}, ...], "model"?}` | Requires auth. Runs `messages` through Fireworks (default model if `model` omitted), including any tool-calling round trips (see `Tools`). `400` if `messages` is missing/empty or `model` isn't a known key, `503` if `FIREWORKS_API_KEY` isn't configured, `402` if the Fireworks account balance is exhausted, `502` on any other upstream failure. Every attempt — success or failure — is recorded to the ledger (`Chat/README` below). Returns `{"reply", "messages", "usage", "cost_usd", "model"}`; `messages` is the full updated conversation, suitable for passing back in as the next request's `messages` to continue the thread. |
 | GET    | `/chat/usage`             | —                                                  | Requires auth. The current user's own lifetime LLM usage: `{"usage": {"requestCount", "totalUsageUsd", "totalTokens", "lastUsedAt"}}`. |
@@ -222,6 +225,42 @@ deleting the row is enough. Concretely, deleting an account:
 No display-name concept was added alongside this — username stays the one
 identity a household sees, per the issue's own open question, until a real
 need for a separate display name shows up.
+
+## Data export
+
+`GET /account/export` (issue #21, `AccountExportService`) — a "get your
+data back" dump: your own account profile, LLM chat usage, and for every
+household you belong to, its notes, pets, shopping list, staples, home
+improvement projects, and current tasks. Settled explicitly, per the
+issue's own open questions:
+
+- **Per-user only, no household-wide/owner-only export.** The export is
+  always scoped to what the requesting user themselves can already see —
+  never a bulk dump of an entire household including other members' own
+  private data. Concretely, this falls out of the implementation rather
+  than needing its own privacy logic: `AccountExportService` calls each
+  tracker's own already-privacy-respecting list method (e.g.
+  `HouseholdService::listNotes()`, which already filters to public notes
+  plus the caller's own private ones for the live UI) instead of querying
+  tables directly, so the same guarantee the UI already has applies here
+  automatically — there's no second, separate privacy check to get wrong.
+- **JSON only.** No per-tracker CSV — revisit if someone actually wants,
+  say, just their shopping history in a spreadsheet; nothing here rules it
+  out later.
+- **Synchronous, single request.** No queueing/emailing a file once ready
+  — every household in this app so far is small enough that a single
+  request comfortably returns the whole thing. Revisit if that stops being
+  true.
+- **Current state, not a full historical record.** Tasks are exported via
+  the same `listTasks()`/`listFinishedToday()` the Tasks tab itself calls
+  — the soonest-due pending instance per task, plus whatever resolved
+  today — not every completion a recurring task has ever logged. A true
+  full history is issue #19's (household activity log) territory; this
+  export should draw on that once it exists rather than growing its own
+  separate deep-history query in the meantime.
+
+The web UI triggers a plain client-side JSON file download from the
+response — no server-side file generation or storage involved.
 
 ## Household invites
 

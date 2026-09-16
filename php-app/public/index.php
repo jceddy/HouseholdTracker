@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use HouseholdTracker\Auth\AccountExportService;
 use HouseholdTracker\Auth\AuthService;
 use HouseholdTracker\Auth\DuplicateEmailException;
 use HouseholdTracker\Auth\DuplicateUsernameException;
@@ -302,6 +303,14 @@ $homeImprovement = new HomeImprovementService(
     $taskInstances
 );
 
+$accountExport = new AccountExportService(
+    new UserRepository(),
+    $households,
+    $tasks,
+    $homeImprovement,
+    new Ledger()
+);
+
 if ($path === '/register' && $method === 'POST') {
     $body = requestBody();
 
@@ -564,6 +573,17 @@ if ($path === '/account/delete' && $method === 'POST') {
     } catch (InvalidCurrentPasswordException $e) {
         respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
+/**
+ * Data export (issue #21) -- everything the caller themselves has access
+ * to, as one JSON document. See AccountExportService's own docblock and
+ * "Data export" in php-app/README.md for exactly what's (and isn't)
+ * included and why.
+ */
+if ($path === '/account/export' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'export' => $accountExport->exportForUser((int) $currentUser['id'])]);
 }
 
 // LLM usage (Fireworks AI) -- see "LLM usage (Fireworks AI)" in

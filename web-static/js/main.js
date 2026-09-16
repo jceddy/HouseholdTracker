@@ -1849,6 +1849,33 @@
         messageEl.hidden = false;
     });
 
+    document.getElementById('account-export-button').addEventListener('click', async () => {
+        const messageEl = document.getElementById('account-export-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/export');
+
+        if (!response.ok) {
+            messageEl.textContent = (body && body.message) || 'Could not export your data.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+            return;
+        }
+
+        // Plain client-side blob download -- the export itself is already
+        // in hand as JSON from the API response, no separate file for the
+        // server to generate or store.
+        const blob = new Blob([JSON.stringify(body.export, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `householdtracker-export-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    });
+
     document.getElementById('account-delete-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const form = event.target;
