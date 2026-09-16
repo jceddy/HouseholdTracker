@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use HouseholdTracker\Auth\AccountExportService;
 use HouseholdTracker\Auth\AuthService;
 use HouseholdTracker\Auth\DuplicateEmailException;
 use HouseholdTracker\Auth\DuplicateUsernameException;
 use HouseholdTracker\Auth\EmailNotVerifiedException;
 use HouseholdTracker\Auth\InvalidCredentialsException;
+use HouseholdTracker\Auth\InvalidCurrentPasswordException;
 use HouseholdTracker\Auth\InvalidPasswordResetTokenException;
 use HouseholdTracker\Auth\InvalidVerificationTokenException;
 use HouseholdTracker\Chat\ChatAgent;
@@ -26,7 +28,7 @@ use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
-use HouseholdTracker\Household\NotAuthorizedToRemoveMemberException;
+use HouseholdTracker\Household\NotHouseholdOwnerException;
 use HouseholdTracker\Household\PetNotFoundException;
 use HouseholdTracker\Household\ProjectNotFoundException;
 use HouseholdTracker\Household\ShoppingItemNotFoundException;
@@ -126,6 +128,7 @@ function publicUser(array $user): array
         'id' => (int) $user['id'],
         'username' => $user['username'],
         'email' => $user['email'],
+        'pending_email' => $user['pending_email'] ?? null,
     ];
 }
 
@@ -298,6 +301,14 @@ $homeImprovement = new HomeImprovementService(
     new HouseholdMemberRepository(),
     $projects,
     $taskInstances
+);
+
+$accountExport = new AccountExportService(
+    new UserRepository(),
+    $households,
+    $tasks,
+    $homeImprovement,
+    new Ledger()
 );
 
 if ($path === '/register' && $method === 'POST') {
@@ -484,6 +495,97 @@ if ($path === '/me' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
 }
 
+// Account management (issue #18) -- distinct from any one household's own
+// settings (issue #7's POST /households/settings): these act on the
+// caller's own account, not a household.
+
+if ($path === '/account/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $result = $auth->updateProfile(
+            (int) $currentUser['id'],
+            array_key_exists('username', $body) ? (string) $body['username'] : null,
+            array_key_exists('email', $body) ? (string) $body['email'] : null
+        );
+    } catch (DuplicateUsernameException | DuplicateEmailException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+
+    if ($result['verificationToken'] !== null) {
+        try {
+            sendVerificationEmail(
+                ['email' => $result['user']['pending_email'], 'username' => $result['user']['username']],
+                $result['verificationToken']
+            );
+        } catch (\Throwable $e) {
+            logMailError('Failed to send email-change verification email: ' . $e->getMessage());
+            respond(502, [
+                'status' => 'error',
+                'message' => 'Your username was updated, but the verification email for your new address '
+                    . 'could not be sent. Please try changing your email again shortly.',
+            ]);
+        }
+    }
+
+    respond(200, [
+        'status' => 'ok',
+        'message' => $result['verificationToken'] !== null
+            ? 'Check your new email address to confirm the change.'
+            : 'Account updated.',
+        'user' => publicUser($result['user']),
+    ]);
+}
+
+if ($path === '/account/change-password' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $auth->changePassword(
+            (int) $currentUser['id'],
+            (string) ($body['current_password'] ?? ''),
+            (string) ($body['new_password'] ?? '')
+        );
+        clearSessionCookie();
+        respond(200, [
+            'status' => 'ok',
+            'message' => 'Your password has been changed. Please log in again.',
+        ]);
+    } catch (InvalidCurrentPasswordException $e) {
+        respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/account/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $auth->deleteAccount((int) $currentUser['id'], (string) ($body['password'] ?? ''));
+        clearSessionCookie();
+        respond(200, ['status' => 'ok']);
+    } catch (InvalidCurrentPasswordException $e) {
+        respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+/**
+ * Data export (issue #21) -- everything the caller themselves has access
+ * to, as one JSON document. See AccountExportService's own docblock and
+ * "Data export" in php-app/README.md for exactly what's (and isn't)
+ * included and why.
+ */
+if ($path === '/account/export' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'export' => $accountExport->exportForUser((int) $currentUser['id'])]);
+}
+
 // LLM usage (Fireworks AI) -- see "LLM usage (Fireworks AI)" in
 // php-app/README.md. A scaffold for whatever household-tracking features
 // end up calling an LLM: HouseholdTracker\Chat\Tools is currently an
@@ -658,7 +760,7 @@ if ($path === '/households/members/remove' && $method === 'POST') {
         respond(200, ['status' => 'ok']);
     } catch (NotAHouseholdMemberException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
-    } catch (NotAuthorizedToRemoveMemberException $e) {
+    } catch (NotHouseholdOwnerException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
@@ -678,6 +780,18 @@ if ($path === '/households/settings' && $method === 'POST') {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteHousehold((int) $currentUser['id'], (int) ($body['household_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (NotAHouseholdMemberException | NotHouseholdOwnerException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
