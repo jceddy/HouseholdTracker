@@ -9,6 +9,23 @@
     }
 
     document.getElementById('current-username').textContent = user.username;
+    document.getElementById('account-username').value = user.username;
+    document.getElementById('account-email').value = user.email;
+    renderPendingEmailNotice(user.pending_email);
+
+    // renderPendingEmailNotice(...) - the Account tab's "you have a change
+    // to <email> awaiting verification" banner, shown until the emailed
+    // link is clicked (see AuthService::verifyEmail()'s pending_email
+    // handling) or a fresh update overwrites it.
+    function renderPendingEmailNotice(pendingEmail) {
+        const el = document.getElementById('account-pending-email-notice');
+        if (pendingEmail) {
+            el.textContent = `A change to ${pendingEmail} is awaiting verification -- check that inbox for the confirmation link.`;
+            el.hidden = false;
+        } else {
+            el.hidden = true;
+        }
+    }
 
     function buildListItem(label) {
         const li = document.createElement('li');
@@ -1771,6 +1788,81 @@
     document.getElementById('logout-button').addEventListener('click', async () => {
         await apiRequest('/logout', { method: 'POST' });
         window.location.href = '/';
+    });
+
+    document.getElementById('account-update-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-update-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/update', {
+            method: 'POST',
+            body: JSON.stringify({ username: form.username.value, email: form.email.value }),
+        });
+
+        if (response.ok) {
+            document.getElementById('current-username').textContent = body.user.username;
+            renderPendingEmailNotice(body.user.pending_email);
+            messageEl.textContent = body.message;
+            messageEl.className = 'message';
+            messageEl.hidden = false;
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not update account.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    // A successful password change/account deletion both invalidate every
+    // session (see AuthService::changePassword()/deleteAccount()) --
+    // including this one, so there's nothing left to do but send the user
+    // back to the login page rather than trying to keep the app shell up.
+
+    document.getElementById('account-password-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-password-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/change-password', {
+            method: 'POST',
+            body: JSON.stringify({
+                current_password: form.current_password.value,
+                new_password: form.new_password.value,
+            }),
+        });
+
+        if (response.ok) {
+            window.location.href = '/';
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not change password.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('account-delete-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-delete-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/delete', {
+            method: 'POST',
+            body: JSON.stringify({ password: form.password.value }),
+        });
+
+        if (response.ok) {
+            window.location.href = '/';
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not delete account.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
     });
 
     document.getElementById('create-household-form').addEventListener('submit', async (event) => {

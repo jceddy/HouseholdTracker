@@ -20,6 +20,7 @@
     <div class="tabs" role="tablist">
         <button type="button" class="top-tab-button" data-top-tab="households" role="tab" aria-selected="true">Households</button>
         <button type="button" class="top-tab-button" data-top-tab="my-tasks" role="tab" aria-selected="false">My Tasks</button>
+        <button type="button" class="top-tab-button" data-top-tab="account" role="tab" aria-selected="false">Account</button>
     </div>
 
     <div class="top-tab-panel" id="top-tab-panel-households" role="tabpanel">
@@ -324,6 +325,47 @@
             <button type="button" id="my-tasks-refresh-button" class="button--compact">Refresh</button>
         </div>
         <ul id="my-tasks-list"></ul>
+    </div>
+
+    <div class="top-tab-panel" id="top-tab-panel-account" role="tabpanel" hidden>
+        <h3>Profile</h3>
+        <form id="account-update-form">
+            <label>Username
+                <input type="text" id="account-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]+">
+            </label>
+            <label>Email
+                <input type="email" id="account-email" name="email" required maxlength="255">
+            </label>
+            <p id="account-pending-email-notice" class="message" hidden></p>
+            <button type="submit">Save</button>
+            <p id="account-update-message" class="message" hidden></p>
+        </form>
+
+        <h3>Change password</h3>
+        <form id="account-password-form">
+            <label>Current password
+                <input type="password" id="account-current-password" name="current_password" required autocomplete="current-password">
+            </label>
+            <label>New password
+                <input type="password" id="account-new-password" name="new_password" required minlength="8" maxlength="72" autocomplete="new-password">
+            </label>
+            <button type="submit">Change password</button>
+            <p id="account-password-message" class="message" hidden></p>
+        </form>
+
+        <h3>Delete account</h3>
+        <p>This permanently deletes your account. Any household you created is deleted along with it, for every member -- see the Account section in the README for the full picture. This cannot be undone.</p>
+        <form id="account-delete-form">
+            <label>Password
+                <input type="password" id="account-delete-password" name="password" required autocomplete="current-password">
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="account-delete-confirm" required>
+                I understand this cannot be undone
+            </label>
+            <button type="submit">Delete my account</button>
+            <p id="account-delete-message" class="message" hidden></p>
+        </form>
     </div>
 
     <button id="logout-button" type="button">Log out</button>

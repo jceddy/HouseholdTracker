@@ -187,6 +187,13 @@ above remains the only way migrations reach the deployed database.
   `household_shopping_items.purchased_at`/`purchased_by_user_id` (same
   `ON DELETE SET NULL`, same reasoning). See "Household staples list" in
   `php-app/README.md`.
+- **Account management** (`0026`, issue #18): adds `users.pending_email`
+  -- an in-progress email change's new address, held here until its
+  verification link is clicked (`AuthService::updateProfile()`/
+  `verifyEmail()`) rather than overwriting `email` outright. See "Account
+  management" in `php-app/README.md`, including what account deletion
+  cascades into via every other table's own existing `users.id` foreign
+  key.
 
 Whatever household-scoped tracker tables come next (finances, calendar,
 whatever the application actually ends up tracking) belong here too, as

@@ -9,6 +9,7 @@ use HouseholdTracker\Auth\DuplicateEmailException;
 use HouseholdTracker\Auth\DuplicateUsernameException;
 use HouseholdTracker\Auth\EmailNotVerifiedException;
 use HouseholdTracker\Auth\InvalidCredentialsException;
+use HouseholdTracker\Auth\InvalidCurrentPasswordException;
 use HouseholdTracker\Auth\InvalidPasswordResetTokenException;
 use HouseholdTracker\Auth\InvalidVerificationTokenException;
 use HouseholdTracker\Chat\ChatAgent;
@@ -126,6 +127,7 @@ function publicUser(array $user): array
         'id' => (int) $user['id'],
         'username' => $user['username'],
         'email' => $user['email'],
+        'pending_email' => $user['pending_email'] ?? null,
     ];
 }
 
@@ -482,6 +484,86 @@ if ($path === '/me' && $method === 'GET') {
 
     setSessionCookie($token, $result['expiresAt']);
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
+}
+
+// Account management (issue #18) -- distinct from any one household's own
+// settings (issue #7's POST /households/settings): these act on the
+// caller's own account, not a household.
+
+if ($path === '/account/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $result = $auth->updateProfile(
+            (int) $currentUser['id'],
+            array_key_exists('username', $body) ? (string) $body['username'] : null,
+            array_key_exists('email', $body) ? (string) $body['email'] : null
+        );
+    } catch (DuplicateUsernameException | DuplicateEmailException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+
+    if ($result['verificationToken'] !== null) {
+        try {
+            sendVerificationEmail(
+                ['email' => $result['user']['pending_email'], 'username' => $result['user']['username']],
+                $result['verificationToken']
+            );
+        } catch (\Throwable $e) {
+            logMailError('Failed to send email-change verification email: ' . $e->getMessage());
+            respond(502, [
+                'status' => 'error',
+                'message' => 'Your username was updated, but the verification email for your new address '
+                    . 'could not be sent. Please try changing your email again shortly.',
+            ]);
+        }
+    }
+
+    respond(200, [
+        'status' => 'ok',
+        'message' => $result['verificationToken'] !== null
+            ? 'Check your new email address to confirm the change.'
+            : 'Account updated.',
+        'user' => publicUser($result['user']),
+    ]);
+}
+
+if ($path === '/account/change-password' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $auth->changePassword(
+            (int) $currentUser['id'],
+            (string) ($body['current_password'] ?? ''),
+            (string) ($body['new_password'] ?? '')
+        );
+        clearSessionCookie();
+        respond(200, [
+            'status' => 'ok',
+            'message' => 'Your password has been changed. Please log in again.',
+        ]);
+    } catch (InvalidCurrentPasswordException $e) {
+        respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/account/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $auth->deleteAccount((int) $currentUser['id'], (string) ($body['password'] ?? ''));
+        clearSessionCookie();
+        respond(200, ['status' => 'ok']);
+    } catch (InvalidCurrentPasswordException $e) {
+        respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // LLM usage (Fireworks AI) -- see "LLM usage (Fireworks AI)" in

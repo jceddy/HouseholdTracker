@@ -78,7 +78,10 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password`         | `{"token", "password"}`                           | Consumes a single-use reset token and sets the new password (8-72 chars). Also deletes every one of the account's sessions. `400` if the token is invalid/expired/used or the password fails validation. |
 | POST   | `/login`                  | `{"username", "password"}`                        | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`                 | —                                                  | Invalidates the current session only. |
-| GET    | `/me`                     | —                                                  | Returns the current user if authenticated, `401` otherwise. |
+| GET    | `/me`                     | —                                                  | Returns the current user if authenticated, `401` otherwise. Includes `pending_email` (see "Account management" below) — `null` unless an email change is awaiting verification. |
+| POST   | `/account/update`         | `{"username"?, "email"?}`                          | Requires auth. Either field may be omitted to leave it alone; a value equal to the caller's current one is a no-op. `username`: same 3-32 char rules as `/register`, `409` if taken. `email`: same valid-format rule, but doesn't take effect immediately — stashed as `pending_email` and emailed a verification link (same flow as `/register`'s), `409` if another account already has it. `400` on validation failure. Returns `{"user"}` (with the new `pending_email` if an email change was requested), `502` if the verification email fails to send (the username half, if any, is not rolled back). See "Account management" below. |
+| POST   | `/account/change-password` | `{"current_password", "new_password"}`            | Requires auth. `401` if `current_password` is wrong; `400` if `new_password` fails the same 8-72 char rule as `/register`. Deletes every one of the account's sessions, current one included, same as `/reset-password` — the frontend sends the user back to the login page. |
+| POST   | `/account/delete`         | `{"password"}`                                     | Requires auth. `401` if `password` is wrong. Deletes the account; see "Account management" below for what that cascades into. |
 | GET    | `/chat/models`            | —                                                  | Requires auth. Lists the model keys `POST /chat` accepts (`{"models": [string], "default_model": string}`) — see `ModelCatalog`. |
 | POST   | `/chat`                   | `{"messages": [{"role","content"}, ...], "model"?}` | Requires auth. Runs `messages` through Fireworks (default model if `model` omitted), including any tool-calling round trips (see `Tools`). `400` if `messages` is missing/empty or `model` isn't a known key, `503` if `FIREWORKS_API_KEY` isn't configured, `402` if the Fireworks account balance is exhausted, `502` on any other upstream failure. Every attempt — success or failure — is recorded to the ledger (`Chat/README` below). Returns `{"reply", "messages", "usage", "cost_usd", "model"}`; `messages` is the full updated conversation, suitable for passing back in as the next request's `messages` to continue the thread. |
 | GET    | `/chat/usage`             | —                                                  | Requires auth. The current user's own lifetime LLM usage: `{"usage": {"requestCount", "totalUsageUsd", "totalTokens", "lastUsedAt"}}`. |
@@ -153,6 +156,70 @@ consumed) when the visitor actually chooses a new password, via
 `POST /reset-password`. `/verify-email`, in contrast, safely consumes its
 token on a bare GET, since a verification link being opened twice (once
 by a scanner, once by the human) is harmless either way.
+
+## Account management
+
+`AuthService::updateProfile()`/`changePassword()`/`deleteAccount()`
+(issue #18) — distinct from `/forgot-password`/`/reset-password` above
+(an unauthenticated, "I don't remember my password" flow) and from any one
+household's own `/households/settings` (issue #7): these act on the
+caller's own account, authenticated, not a household.
+
+**Username/email update** (`POST /account/update`) — a username change
+applies immediately, no re-verification needed (it's a login identifier,
+not a contact address). An email change does not: the new address is
+stashed in `users.pending_email` (migration `0026`) rather than
+overwriting `email` outright, and a verification link is emailed to *that*
+new address, reusing the exact same `email_verifications` token flow
+`/register` already uses. `AuthService::verifyEmail()` (used by both
+registration and this) checks `pending_email` on the token's account: set,
+it promotes `pending_email` to `email` and clears it; unset, it just marks
+the existing `email` verified (the plain registration case). Until that
+link is clicked, the caller keeps logging in and receiving mail at their
+current, already-verified address — a typo'd new address can't lock
+anyone out.
+
+**Change password** (`POST /account/change-password`) — the logged-in
+counterpart to `/reset-password`: proves identity with the current
+password instead of an emailed token, but ends the same way, deleting
+every one of the account's sessions (current one included) for the same
+reason `resetPassword()` already documents — a password change is as much
+a signal of possible compromise as a forced reset. The web UI sends the
+user back to the login page afterward.
+
+**Account deletion** (`POST /account/delete`) — a real, user-initiated
+deletion, confirmed by the account's own password (distinct from
+`AuthService::cancelRegistration()`'s internal rollback-on-failed-
+verification-email path, which isn't user-facing). No bespoke cleanup
+code: every table that references `users.id` already has its own
+`ON DELETE CASCADE`/`SET NULL` from the migration that added it, so
+deleting the row is enough. Concretely, deleting an account:
+
+- Deletes every session, email/password-reset token, and chat-usage record
+  of theirs directly (`ON DELETE CASCADE`).
+- Deletes every household **they created** (`households.created_by_user_id`
+  is `CASCADE`) — which in turn deletes *all* of that household's own data
+  (members, notes, pets, tasks, shopping items, staples, home improvement
+  projects, invites — every `household_id` foreign key cascades too), for
+  every member, not just the deleted account. This is the same
+  no-ownership-transfer reality "Household invites" below already lives
+  with (an owner can already leave a household unchallenged); deleting
+  your account is a stricter version of leaving every household at once,
+  and the web UI's delete-account form says so before letting the request
+  through.
+- Removes their membership (and anything else `_by_user_id`-shaped they
+  authored) from every household they *don't* own, without touching that
+  household itself.
+- Nulls out a handful of "who happened to act on this shared row" columns
+  that use `ON DELETE SET NULL` instead of `CASCADE` (e.g.
+  `household_task_instances.completed_by_user_id`,
+  `household_shopping_items.purchased_by_user_id`,
+  `household_staple_items.flagged_by_user_id`) — the row itself survives,
+  just with no record of who acted on it.
+
+No display-name concept was added alongside this — username stays the one
+identity a household sees, per the issue's own open question, until a real
+need for a separate display name shows up.
 
 ## Household invites
 
