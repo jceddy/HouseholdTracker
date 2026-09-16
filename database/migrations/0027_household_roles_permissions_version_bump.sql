@@ -8,4 +8,4 @@
 -- change still bumps VERSION -- this carries that bump.
 SET NAMES utf8mb4;
 
-UPDATE schema_version SET version = '0.24.0' WHERE id = 1;
+UPDATE schema_version SET version = '0.25.0' WHERE id = 1;
