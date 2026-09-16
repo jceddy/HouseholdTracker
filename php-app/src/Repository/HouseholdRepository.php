@@ -33,4 +33,17 @@ final class HouseholdRepository
 
         return $household === false ? null : $household;
     }
+
+    /**
+     * delete(...) - the household row is enough; every other household-
+     * scoped table's own household_id foreign key already cascades from it
+     * (see database/README.md's schema overview), so there's no per-tracker
+     * cleanup to do here. See HouseholdService::deleteHousehold() (issue
+     * #17).
+     */
+    public function delete(int $id): void
+    {
+        $stmt = Connection::get()->prepare('DELETE FROM households WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+    }
 }

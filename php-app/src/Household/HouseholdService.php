@@ -23,6 +23,14 @@ use HouseholdTracker\Repository\UserRepository;
  * if neither matches and the input is a valid email address, an
  * unregistered one -- that invite doubles as a registration link (see
  * inviteMember()/linkPendingInvitesForEmail()).
+ *
+ * Permissions (issue #17): requireMember() gates "is the caller a member at
+ * all" (every route in this class needs at least that); requireOwner()
+ * gates the two actions reserved for the household's owner -- removing
+ * another member and deleting the household outright. Every other action
+ * (inviting, editing settings, and every tracker's own create/edit/delete)
+ * is deliberately "any member" -- see "Household roles and permissions" in
+ * php-app/README.md for the full matrix and the reasoning behind it.
  */
 final class HouseholdService
 {
@@ -167,20 +175,18 @@ final class HouseholdService
     }
 
     /**
-     * removeMember(...) - a member may remove themselves (leave); removing
-     * someone else requires the caller to be the household's owner. v1 has no
-     * ownership-transfer story (see issue #17), so an owner can also leave
-     * their own household unchallenged, same as any member.
+     * removeMember(...) - a member may remove themselves (leave) freely;
+     * removing someone else requires the caller to be the household's
+     * owner (issue #17). v1 has no ownership-transfer story, so an owner
+     * can also leave their own household unchallenged, same as any member
+     * -- there's deliberately no "last owner" special case blocking it.
      */
     public function removeMember(int $callerId, int $householdId, int $targetUserId): void
     {
-        $callerMembership = $this->members->find($householdId, $callerId);
-        if ($callerMembership === null) {
-            throw new NotAHouseholdMemberException('You are not a member of this household.');
-        }
-
-        if ($callerId !== $targetUserId && $callerMembership['role'] !== 'owner') {
-            throw new NotAuthorizedToRemoveMemberException('Only the household owner can remove other members.');
+        if ($callerId === $targetUserId) {
+            $this->requireMember($householdId, $callerId);
+        } else {
+            $this->requireOwner($householdId, $callerId, 'Only the household owner can remove other members.');
         }
 
         if ($this->members->find($householdId, $targetUserId) === null) {
@@ -188,6 +194,19 @@ final class HouseholdService
         }
 
         $this->members->remove($householdId, $targetUserId);
+    }
+
+    /**
+     * deleteHousehold(...) - owner-only (issue #17). No bespoke cleanup
+     * needed beyond the households row itself: every household-scoped
+     * table's own household_id foreign key already cascades from it (see
+     * HouseholdRepository::delete()), the same reasoning
+     * AuthService::deleteAccount() documents for a deleted user's own data.
+     */
+    public function deleteHousehold(int $callerId, int $householdId): void
+    {
+        $this->requireOwner($householdId, $callerId, 'Only the household owner can delete the household.');
+        $this->households->delete($householdId);
     }
 
     /**
@@ -573,6 +592,25 @@ final class HouseholdService
     {
         if ($this->members->find($householdId, $userId) === null) {
             throw new NotAHouseholdMemberException('You are not a member of this household.');
+        }
+    }
+
+    /**
+     * requireOwner(...) - the shared guard, alongside requireMember(), for
+     * an action reserved for the household's owner (issue #17). $message is
+     * caller-supplied (like NotAHouseholdMemberException's own messages
+     * throughout this class) so each action names itself in the error
+     * rather than a single generic "not allowed".
+     */
+    private function requireOwner(int $householdId, int $userId, string $message): void
+    {
+        $membership = $this->members->find($householdId, $userId);
+        if ($membership === null) {
+            throw new NotAHouseholdMemberException('You are not a member of this household.');
+        }
+
+        if ($membership['role'] !== 'owner') {
+            throw new NotHouseholdOwnerException($message);
         }
     }
 }
