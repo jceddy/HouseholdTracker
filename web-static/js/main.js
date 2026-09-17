@@ -9,6 +9,23 @@
     }
 
     document.getElementById('current-username').textContent = user.username;
+    document.getElementById('account-username').value = user.username;
+    document.getElementById('account-email').value = user.email;
+    renderPendingEmailNotice(user.pending_email);
+
+    // renderPendingEmailNotice(...) - the Account tab's "you have a change
+    // to <email> awaiting verification" banner, shown until the emailed
+    // link is clicked (see AuthService::verifyEmail()'s pending_email
+    // handling) or a fresh update overwrites it.
+    function renderPendingEmailNotice(pendingEmail) {
+        const el = document.getElementById('account-pending-email-notice');
+        if (pendingEmail) {
+            el.textContent = `A change to ${pendingEmail} is awaiting verification -- check that inbox for the confirmation link.`;
+            el.hidden = false;
+        } else {
+            el.hidden = true;
+        }
+    }
 
     function buildListItem(label) {
         const li = document.createElement('li');
@@ -289,12 +306,17 @@
         const { response, body } = await apiRequest('/households/members?household_id=' + householdId);
         const list = document.getElementById('household-members-list');
         list.innerHTML = '';
+        // Reset before the fetch resolves, not just on success below -- a
+        // failed load shouldn't leave the previous household's "Delete
+        // household" section visible for one that hasn't confirmed it yet.
+        document.getElementById('household-delete-section').hidden = true;
 
         if (!response.ok) {
             return;
         }
 
         const isOwner = body.members.some((member) => member.user_id === user.id && member.role === 'owner');
+        document.getElementById('household-delete-section').hidden = !isOwner;
         currentMembers = body.members;
         populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
         populateAssigneeCheckboxes(document.getElementById('hi-maintenance-assignees'));
@@ -1773,6 +1795,108 @@
         window.location.href = '/';
     });
 
+    document.getElementById('account-update-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-update-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/update', {
+            method: 'POST',
+            body: JSON.stringify({ username: form.username.value, email: form.email.value }),
+        });
+
+        if (response.ok) {
+            document.getElementById('current-username').textContent = body.user.username;
+            renderPendingEmailNotice(body.user.pending_email);
+            messageEl.textContent = body.message;
+            messageEl.className = 'message';
+            messageEl.hidden = false;
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not update account.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    // A successful password change/account deletion both invalidate every
+    // session (see AuthService::changePassword()/deleteAccount()) --
+    // including this one, so there's nothing left to do but send the user
+    // back to the login page rather than trying to keep the app shell up.
+
+    document.getElementById('account-password-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-password-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/change-password', {
+            method: 'POST',
+            body: JSON.stringify({
+                current_password: form.current_password.value,
+                new_password: form.new_password.value,
+            }),
+        });
+
+        if (response.ok) {
+            window.location.href = '/';
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not change password.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('account-export-button').addEventListener('click', async () => {
+        const messageEl = document.getElementById('account-export-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/export');
+
+        if (!response.ok) {
+            messageEl.textContent = (body && body.message) || 'Could not export your data.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+            return;
+        }
+
+        // Plain client-side blob download -- the export itself is already
+        // in hand as JSON from the API response, no separate file for the
+        // server to generate or store.
+        const blob = new Blob([JSON.stringify(body.export, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `householdtracker-export-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('account-delete-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('account-delete-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/account/delete', {
+            method: 'POST',
+            body: JSON.stringify({ password: form.password.value }),
+        });
+
+        if (response.ok) {
+            window.location.href = '/';
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not delete account.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
     document.getElementById('create-household-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -1836,6 +1960,27 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save settings.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-delete-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const messageEl = document.getElementById('household-delete-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/delete', {
+            method: 'POST',
+            body: JSON.stringify({ household_id: currentHouseholdId }),
+        });
+
+        if (response.ok) {
+            closeHouseholdDetail();
+            await loadHouseholds();
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not delete household.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });

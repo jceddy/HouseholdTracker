@@ -117,6 +117,13 @@ final class AuthService
         return ['user' => $user, 'verificationToken' => $token];
     }
 
+    /**
+     * Marks the account verified -- or, if this token was issued for an
+     * in-progress email change (see updateProfile()), promotes
+     * pending_email to the account's real email instead. Either way is the
+     * same link a user clicks from an email, so one route/method handles
+     * both; which one happened is just whether pending_email was set.
+     */
     public function verifyEmail(string $token): array
     {
         $verification = $this->emailVerifications->findValidByTokenHash(hash('sha256', $token));
@@ -126,7 +133,14 @@ final class AuthService
         }
 
         $userId = (int) $verification['user_id'];
-        $this->users->markEmailVerified($userId);
+        $user = $this->users->findById($userId);
+
+        if ($user['pending_email'] !== null) {
+            $this->users->applyPendingEmail($userId, $user['pending_email']);
+        } else {
+            $this->users->markEmailVerified($userId);
+        }
+
         $this->emailVerifications->deleteAllForUser($userId);
 
         return $this->users->findById($userId);
@@ -216,6 +230,109 @@ final class AuthService
     }
 
     /**
+     * updateProfile(...) - a username change applies immediately (no
+     * re-verification needed, it's not a contact address); an email change
+     * does not -- it's stashed in pending_email and only takes effect once
+     * its verification link is clicked (see verifyEmail()), the same
+     * email_verifications token flow registration already uses. Either
+     * argument may be null to leave that field alone, and a value equal to
+     * the user's current one is a no-op rather than an error (so re-
+     * submitting an unchanged form field doesn't trip the uniqueness check
+     * against the user's own existing row).
+     *
+     * @return array{user: array, verificationToken: ?string}
+     */
+    public function updateProfile(int $userId, ?string $newUsername, ?string $newEmail): array
+    {
+        $user = $this->users->findById($userId);
+
+        if ($newUsername !== null) {
+            $newUsername = trim($newUsername);
+            if (!preg_match('/^[A-Za-z0-9_-]{3,32}$/', $newUsername)) {
+                throw new \InvalidArgumentException(
+                    'Username must be 3-32 characters (letters, numbers, "_", "-").'
+                );
+            }
+            if ($newUsername !== $user['username']) {
+                if ($this->users->findByUsername($newUsername) !== null) {
+                    throw new DuplicateUsernameException("Username \"{$newUsername}\" is already taken.");
+                }
+                $this->users->updateUsername($userId, $newUsername);
+            }
+        }
+
+        $verificationToken = null;
+
+        if ($newEmail !== null) {
+            $newEmail = trim($newEmail);
+            if (strlen($newEmail) > 255 || filter_var($newEmail, FILTER_VALIDATE_EMAIL) === false) {
+                throw new \InvalidArgumentException('A valid email address is required.');
+            }
+            if ($newEmail !== $user['email']) {
+                if ($this->users->findByEmail($newEmail) !== null) {
+                    throw new DuplicateEmailException("An account with email \"{$newEmail}\" already exists.");
+                }
+
+                $this->users->setPendingEmail($userId, $newEmail);
+                $this->emailVerifications->deleteAllForUser($userId);
+
+                $verificationToken = bin2hex(random_bytes(32));
+                $expiresAt = new DateTimeImmutable('+' . self::EMAIL_VERIFICATION_TTL_HOURS . ' hours');
+                $this->emailVerifications->create($userId, hash('sha256', $verificationToken), $expiresAt);
+            }
+        }
+
+        return ['user' => $this->users->findById($userId), 'verificationToken' => $verificationToken];
+    }
+
+    /**
+     * The logged-in counterpart to resetPassword() -- proves identity via
+     * the current password instead of an emailed token. Same "any existing
+     * session may be compromised" reasoning applies just as much to a
+     * deliberate change as to a forced reset, so this logs out everywhere
+     * too, current session included; the caller (index.php's route) clears
+     * this request's own cookie and the frontend sends the user back to
+     * the login page.
+     */
+    public function changePassword(int $userId, string $currentPassword, string $newPassword): void
+    {
+        $user = $this->users->findById($userId);
+
+        if (!password_verify($currentPassword, $user['password_hash'])) {
+            throw new InvalidCurrentPasswordException('Current password is incorrect.');
+        }
+
+        if (strlen($newPassword) < 8 || strlen($newPassword) > 72) {
+            throw new \InvalidArgumentException('Password must be between 8 and 72 characters.');
+        }
+
+        $this->users->updatePasswordHash($userId, password_hash($newPassword, PASSWORD_BCRYPT));
+        $this->sessions->deleteAllForUser($userId);
+    }
+
+    /**
+     * A real, user-initiated deletion (distinct from cancelRegistration()'s
+     * internal rollback path above) -- gated on the account's own password
+     * as confirmation, same as changePassword(). No explicit session
+     * cleanup needed: sessions.user_id is ON DELETE CASCADE (see
+     * database/migrations/0001_baseline.sql), and every other table that
+     * references users.id cascades or nulls out per its own migration --
+     * see "Account deletion" in php-app/README.md for the full picture,
+     * including a household's own fate when its creator deletes their
+     * account.
+     */
+    public function deleteAccount(int $userId, string $password): void
+    {
+        $user = $this->users->findById($userId);
+
+        if (!password_verify($password, $user['password_hash'])) {
+            throw new InvalidCurrentPasswordException('Password is incorrect.');
+        }
+
+        $this->users->delete($userId);
+    }
+
+    /**
      * @return array{user: array{id: int, username: string, email: string}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
@@ -234,6 +351,7 @@ final class AuthService
                 'id' => (int) $session['user_id'],
                 'username' => $session['username'],
                 'email' => $session['email'],
+                'pending_email' => $session['pending_email'],
             ],
             'expiresAt' => $expiresAt,
         ];

@@ -31,10 +31,13 @@ database.
 - `public/` — Web server document root / front controller.
 - `src/` — Application source (PSR-4 autoloaded under `HouseholdTracker\`).
   - `Auth/` — Registration, login, session, and password reset logic
-    (`AuthService`) plus its exceptions.
+    (`AuthService`), account profile/password/deletion management (issue
+    #18) and data export (`AccountExportService`, issue #21), plus their
+    exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
-    issue #24; staples — issue #66) plus its exceptions; `TaskService`/`RecurrenceCalculator`
+    issue #24; staples — issue #66; roles and permissions — issue #17)
+    plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11).
   - `Repository/` — Thin PDO data-access classes, one per table.
@@ -78,7 +81,11 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password`         | `{"token", "password"}`                           | Consumes a single-use reset token and sets the new password (8-72 chars). Also deletes every one of the account's sessions. `400` if the token is invalid/expired/used or the password fails validation. |
 | POST   | `/login`                  | `{"username", "password"}`                        | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`                 | —                                                  | Invalidates the current session only. |
-| GET    | `/me`                     | —                                                  | Returns the current user if authenticated, `401` otherwise. |
+| GET    | `/me`                     | —                                                  | Returns the current user if authenticated, `401` otherwise. Includes `pending_email` (see "Account management" below) — `null` unless an email change is awaiting verification. |
+| POST   | `/account/update`         | `{"username"?, "email"?}`                          | Requires auth. Either field may be omitted to leave it alone; a value equal to the caller's current one is a no-op. `username`: same 3-32 char rules as `/register`, `409` if taken. `email`: same valid-format rule, but doesn't take effect immediately — stashed as `pending_email` and emailed a verification link (same flow as `/register`'s), `409` if another account already has it. `400` on validation failure. Returns `{"user"}` (with the new `pending_email` if an email change was requested), `502` if the verification email fails to send (the username half, if any, is not rolled back). See "Account management" below. |
+| POST   | `/account/change-password` | `{"current_password", "new_password"}`            | Requires auth. `401` if `current_password` is wrong; `400` if `new_password` fails the same 8-72 char rule as `/register`. Deletes every one of the account's sessions, current one included, same as `/reset-password` — the frontend sends the user back to the login page. |
+| POST   | `/account/delete`         | `{"password"}`                                     | Requires auth. `401` if `password` is wrong. Deletes the account; see "Account management" below for what that cascades into. |
+| GET    | `/account/export`         | —                                                  | Requires auth. Everything the caller themselves has access to, as one JSON document — see "Data export" below for exactly what's included. Returns `{"export": {...}}`. |
 | GET    | `/chat/models`            | —                                                  | Requires auth. Lists the model keys `POST /chat` accepts (`{"models": [string], "default_model": string}`) — see `ModelCatalog`. |
 | POST   | `/chat`                   | `{"messages": [{"role","content"}, ...], "model"?}` | Requires auth. Runs `messages` through Fireworks (default model if `model` omitted), including any tool-calling round trips (see `Tools`). `400` if `messages` is missing/empty or `model` isn't a known key, `503` if `FIREWORKS_API_KEY` isn't configured, `402` if the Fireworks account balance is exhausted, `502` on any other upstream failure. Every attempt — success or failure — is recorded to the ledger (`Chat/README` below). Returns `{"reply", "messages", "usage", "cost_usd", "model"}`; `messages` is the full updated conversation, suitable for passing back in as the next request's `messages` to continue the thread. |
 | GET    | `/chat/usage`             | —                                                  | Requires auth. The current user's own lifetime LLM usage: `{"usage": {"requestCount", "totalUsageUsd", "totalTokens", "lastUsedAt"}}`. |
@@ -88,8 +95,9 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/invite`      | `{"household_id", "username_or_email"}`            | Requires auth; `403` if the caller isn't a member. Looks up the target by username, then email; if neither matches but the input is itself a valid email address, invites that address instead — the invite doubles as a registration link (see "Household invites" below). `404` if no account matches and the input isn't a valid email either, `409` if already a member/already has a pending invite (existing-user or email invite alike), `409` if inviting yourself, `502` if the invitation email can't be sent (rolled back so you can retry). |
 | GET    | `/households/invites`     | —                                                  | Requires auth. The caller's own pending invites: `{"invites": [{"id","household_id","household_name","invited_by_user_id","invited_by_username","created_at"}]}`. |
 | POST   | `/households/invites/respond` | `{"invite_id", "action": "accept"\|"decline"}` | Requires auth. `404` if there's no such pending invite addressed to the caller. Accepting adds them as a `member`. |
-| POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else. |
-| POST   | `/households/settings`    | `{"household_id", "name"}`                        | Requires auth; `403` if the caller isn't a member. Renames the household (1-100 chars, `400` otherwise) — see "Household settings, notes, and pets" below. Returns `{"household"}`. |
+| POST   | `/households/members/remove` | `{"household_id", "user_id"}`                   | Requires auth; `404` if the caller isn't a member of that household, or `user_id` isn't either. `403` unless the caller is removing themselves (leaving) or is the household's `owner` removing someone else — see "Household roles and permissions" below. |
+| POST   | `/households/settings`    | `{"household_id", "name"}`                        | Requires auth; `403` if the caller isn't a member — any member, not just the owner, see "Household roles and permissions" below. Renames the household (1-100 chars, `400` otherwise) — see "Household settings, notes, and pets" below. Returns `{"household"}`. |
+| POST   | `/households/delete`      | `{"household_id"}`                                | Requires auth; `403` if the caller isn't a member, or is a member but not the `owner`. Deletes the household outright — every household-scoped table's own `household_id` foreign key cascades from it (see `database/README.md`'s schema overview), so there's nothing else to clean up. See "Household roles and permissions" below. |
 | GET    | `/households/notes`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every `public` note in the household plus the caller's own `private` ones — never another member's private notes. Returns `{"notes": [{"id","household_id","author_user_id","author_username","visibility","body","created_at","updated_at"}]}`. |
 | POST   | `/households/notes`       | `{"household_id", "visibility": "private"\|"public", "body"}` | Requires auth; `403` if the caller isn't a member. `body`: 1-20,000 chars, `400` otherwise. Returns `{"note"}`. |
 | POST   | `/households/notes/update` | `{"note_id", "visibility", "body"}`               | Requires auth. `404` if no such note; `403` unless the caller is the note's own author (public notes included — see below). |
@@ -154,6 +162,106 @@ consumed) when the visitor actually chooses a new password, via
 token on a bare GET, since a verification link being opened twice (once
 by a scanner, once by the human) is harmless either way.
 
+## Account management
+
+`AuthService::updateProfile()`/`changePassword()`/`deleteAccount()`
+(issue #18) — distinct from `/forgot-password`/`/reset-password` above
+(an unauthenticated, "I don't remember my password" flow) and from any one
+household's own `/households/settings` (issue #7): these act on the
+caller's own account, authenticated, not a household.
+
+**Username/email update** (`POST /account/update`) — a username change
+applies immediately, no re-verification needed (it's a login identifier,
+not a contact address). An email change does not: the new address is
+stashed in `users.pending_email` (migration `0026`) rather than
+overwriting `email` outright, and a verification link is emailed to *that*
+new address, reusing the exact same `email_verifications` token flow
+`/register` already uses. `AuthService::verifyEmail()` (used by both
+registration and this) checks `pending_email` on the token's account: set,
+it promotes `pending_email` to `email` and clears it; unset, it just marks
+the existing `email` verified (the plain registration case). Until that
+link is clicked, the caller keeps logging in and receiving mail at their
+current, already-verified address — a typo'd new address can't lock
+anyone out.
+
+**Change password** (`POST /account/change-password`) — the logged-in
+counterpart to `/reset-password`: proves identity with the current
+password instead of an emailed token, but ends the same way, deleting
+every one of the account's sessions (current one included) for the same
+reason `resetPassword()` already documents — a password change is as much
+a signal of possible compromise as a forced reset. The web UI sends the
+user back to the login page afterward.
+
+**Account deletion** (`POST /account/delete`) — a real, user-initiated
+deletion, confirmed by the account's own password (distinct from
+`AuthService::cancelRegistration()`'s internal rollback-on-failed-
+verification-email path, which isn't user-facing). No bespoke cleanup
+code: every table that references `users.id` already has its own
+`ON DELETE CASCADE`/`SET NULL` from the migration that added it, so
+deleting the row is enough. Concretely, deleting an account:
+
+- Deletes every session, email/password-reset token, and chat-usage record
+  of theirs directly (`ON DELETE CASCADE`).
+- Deletes every household **they created** (`households.created_by_user_id`
+  is `CASCADE`) — which in turn deletes *all* of that household's own data
+  (members, notes, pets, tasks, shopping items, staples, home improvement
+  projects, invites — every `household_id` foreign key cascades too), for
+  every member, not just the deleted account. This is the same
+  no-ownership-transfer reality "Household invites" below already lives
+  with (an owner can already leave a household unchallenged); deleting
+  your account is a stricter version of leaving every household at once,
+  and the web UI's delete-account form says so before letting the request
+  through.
+- Removes their membership (and anything else `_by_user_id`-shaped they
+  authored) from every household they *don't* own, without touching that
+  household itself.
+- Nulls out a handful of "who happened to act on this shared row" columns
+  that use `ON DELETE SET NULL` instead of `CASCADE` (e.g.
+  `household_task_instances.completed_by_user_id`,
+  `household_shopping_items.purchased_by_user_id`,
+  `household_staple_items.flagged_by_user_id`) — the row itself survives,
+  just with no record of who acted on it.
+
+No display-name concept was added alongside this — username stays the one
+identity a household sees, per the issue's own open question, until a real
+need for a separate display name shows up.
+
+## Data export
+
+`GET /account/export` (issue #21, `AccountExportService`) — a "get your
+data back" dump: your own account profile, LLM chat usage, and for every
+household you belong to, its notes, pets, shopping list, staples, home
+improvement projects, and current tasks. Settled explicitly, per the
+issue's own open questions:
+
+- **Per-user only, no household-wide/owner-only export.** The export is
+  always scoped to what the requesting user themselves can already see —
+  never a bulk dump of an entire household including other members' own
+  private data. Concretely, this falls out of the implementation rather
+  than needing its own privacy logic: `AccountExportService` calls each
+  tracker's own already-privacy-respecting list method (e.g.
+  `HouseholdService::listNotes()`, which already filters to public notes
+  plus the caller's own private ones for the live UI) instead of querying
+  tables directly, so the same guarantee the UI already has applies here
+  automatically — there's no second, separate privacy check to get wrong.
+- **JSON only.** No per-tracker CSV — revisit if someone actually wants,
+  say, just their shopping history in a spreadsheet; nothing here rules it
+  out later.
+- **Synchronous, single request.** No queueing/emailing a file once ready
+  — every household in this app so far is small enough that a single
+  request comfortably returns the whole thing. Revisit if that stops being
+  true.
+- **Current state, not a full historical record.** Tasks are exported via
+  the same `listTasks()`/`listFinishedToday()` the Tasks tab itself calls
+  — the soonest-due pending instance per task, plus whatever resolved
+  today — not every completion a recurring task has ever logged. A true
+  full history is issue #19's (household activity log) territory; this
+  export should draw on that once it exists rather than growing its own
+  separate deep-history query in the meantime.
+
+The web UI triggers a plain client-side JSON file download from the
+response — no server-side file generation or storage involved.
+
 ## Household invites
 
 A user may belong to any number of households — `household_members` is a
@@ -184,10 +292,56 @@ uses for a failed verification email.
 
 Any member can invite someone else or remove themselves (leave); removing
 a *different* member requires being the household's `owner` — see
-`HouseholdService::removeMember()`. There's no ownership-transfer story
-yet (tracked in issue #17's own broader roles/permissions work), so for
-now an owner can also leave their own household unchallenged, same as any
-member.
+"Household roles and permissions" below for the full matrix this is part
+of.
+
+## Household roles and permissions
+
+`household_members.role` (`owner`/`member`, from issue #5) gated nothing
+beyond membership itself until issue #17 settled which actions actually
+need more than "is this person a member at all":
+
+- **Owner-only**: removing a *different* member (`HouseholdService::
+  removeMember()`), and deleting the household outright (`deleteHousehold()`,
+  `POST /households/delete`) — a new capability this issue adds, not just
+  a permission check on an existing one. Both go through a shared
+  `requireOwner(int $householdId, int $userId, string $message)` guard,
+  alongside the existing `requireMember()`, throwing a single
+  `NotHouseholdOwnerException` (403) with an action-specific message
+  rather than each action inventing its own exception.
+- **Any member**: inviting someone else, leaving the household yourself,
+  editing household settings (issue #7), and every tracker's own
+  create/edit/delete (notes, pets, tasks, the shopping list, staples, home
+  improvement projects). These were already implemented this way before
+  #17 — this issue is a decision that they *stay* that way, not a change:
+  a household is a small, trusted, collaborative group, and restricting
+  everyday actions to the owner alone would just be friction with no
+  concrete need behind it yet. Revisit per-action if a real need shows up,
+  rather than restricting pre-emptively.
+
+Open questions from issue #17, settled for v1:
+
+- **Ownership is singular and non-transferable.** Whoever created the
+  household is its one `owner` for as long as it exists; there's no
+  transfer/shared-ownership flow. An owner can still leave (or delete
+  their whole account, see "Account management" above) unchallenged, same
+  as any member — no "last owner" special case blocks it. A real
+  ownership-transfer story is its own future issue if households ever
+  outlive their original creator's involvement in practice.
+- **Owner/member is enough — no third tier.** No "admin" role short of
+  full ownership exists; add one only once a concrete need for a
+  middle tier shows up, rather than speculatively.
+- **No per-tracker permission overrides.** Every tracker uses the same
+  household-level owner/member split (in practice, "any member" for
+  everything of theirs) rather than its own bespoke permission model —
+  e.g. a future budget tracker (#9) doesn't get its own "who can edit this"
+  concept independent of the matrix above unless a real need for one
+  surfaces.
+
+Whatever household-scoped feature comes next should point back to this
+matrix rather than deciding its own permission model from scratch — "any
+member" unless there's a specific, stated reason it needs to be
+owner-only.
 
 ## Household settings, notes, and pets
 

@@ -56,6 +56,32 @@ final class UserRepository
         $stmt->execute(['id' => $id]);
     }
 
+    public function updateUsername(int $id, string $username): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET username = :username WHERE id = :id');
+        $stmt->execute(['username' => $username, 'id' => $id]);
+    }
+
+    public function setPendingEmail(int $id, string $pendingEmail): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET pending_email = :pending_email WHERE id = :id');
+        $stmt->execute(['pending_email' => $pendingEmail, 'id' => $id]);
+    }
+
+    /**
+     * applyPendingEmail(...) - the verification side of setPendingEmail():
+     * promotes pending_email to email, clears pending_email, and marks the
+     * (now current) address verified, all in one statement so there's no
+     * window where email_verified_at is stale relative to email.
+     */
+    public function applyPendingEmail(int $id, string $newEmail): void
+    {
+        $stmt = Connection::get()->prepare(
+            'UPDATE users SET email = :email, pending_email = NULL, email_verified_at = NOW() WHERE id = :id'
+        );
+        $stmt->execute(['email' => $newEmail, 'id' => $id]);
+    }
+
     public function updatePasswordHash(int $id, string $passwordHash): void
     {
         $stmt = Connection::get()->prepare('UPDATE users SET password_hash = :password_hash WHERE id = :id');
