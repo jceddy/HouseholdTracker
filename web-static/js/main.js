@@ -34,10 +34,17 @@
         }
     }
 
+    // buildListItem(...) - label is usually a plain string, but may be a
+    // DOM node instead (e.g. buildContactLabelElement()'s tel:/mailto:
+    // links) when the row needs more than plain text.
     function buildListItem(label) {
         const li = document.createElement('li');
         const labelEl = document.createElement('span');
-        labelEl.textContent = label;
+        if (typeof label === 'string') {
+            labelEl.textContent = label;
+        } else {
+            labelEl.appendChild(label);
+        }
         const actions = document.createElement('span');
         actions.className = 'li-actions';
         li.appendChild(labelEl);
@@ -525,14 +532,50 @@
         return entries;
     }
 
-    function formatContactLabel(contact) {
-        const details = [
-            contact.category,
-            ...(contact.phones || []).map((p) => `${capitalizeContactLabel(p.label)}: ${p.phone}`),
-            ...(contact.emails || []).map((e) => `${capitalizeContactLabel(e.label)}: ${e.email}`),
-        ].filter(Boolean);
+    // buildContactLabelElement(...) - same info formatCalendarEventLabel-
+    // style functions build as a plain string elsewhere, but a contact's
+    // phone/email entries render as real tel:/mailto: links here instead,
+    // so tapping one on a phone actually dials/composes rather than just
+    // displaying the number/address as inert text.
+    function buildContactLabelElement(contact) {
+        const container = document.createElement('span');
+        container.appendChild(document.createTextNode(contact.name));
 
-        return details.length ? `${contact.name} (${details.join(', ')})` : contact.name;
+        const detailNodes = [];
+        if (contact.category) {
+            detailNodes.push(document.createTextNode(contact.category));
+        }
+        for (const phone of contact.phones || []) {
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(`${capitalizeContactLabel(phone.label)}: `));
+            const link = document.createElement('a');
+            link.href = 'tel:' + phone.phone;
+            link.textContent = phone.phone;
+            frag.appendChild(link);
+            detailNodes.push(frag);
+        }
+        for (const email of contact.emails || []) {
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(`${capitalizeContactLabel(email.label)}: `));
+            const link = document.createElement('a');
+            link.href = 'mailto:' + email.email;
+            link.textContent = email.email;
+            frag.appendChild(link);
+            detailNodes.push(frag);
+        }
+
+        if (detailNodes.length > 0) {
+            container.appendChild(document.createTextNode(' ('));
+            detailNodes.forEach((node, index) => {
+                if (index > 0) {
+                    container.appendChild(document.createTextNode(', '));
+                }
+                container.appendChild(node);
+            });
+            container.appendChild(document.createTextNode(')'));
+        }
+
+        return container;
     }
 
     async function loadContacts(householdId) {
@@ -548,7 +591,7 @@
         populateVetSelect(document.getElementById('household-pet-vet-contact'));
 
         for (const contact of body.contacts) {
-            const { li, actions } = buildListItem(formatContactLabel(contact));
+            const { li, actions } = buildListItem(buildContactLabelElement(contact));
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderContactEditForm(li, contact, householdId)));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/contacts/delete', {
