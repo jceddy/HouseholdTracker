@@ -36,7 +36,8 @@ database.
     exceptions.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
-    issue #24; staples — issue #66; roles and permissions — issue #17)
+    issue #24; staples — issue #66; roles and permissions — issue #17;
+    the calendar — issue #13)
     plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11).
@@ -117,6 +118,10 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/staples/unflag` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. Clears `needs_restock`/`flagged_by_user_id`/`flagged_at`. Returns `{"item"}`. |
 | POST   | `/households/staples/delete` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. |
 | POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household and clears their flags. Returns `{"items": [...]}` (the newly-created shopping items, possibly empty). |
+| GET    | `/households/calendar`    | query params `household_id`, `from`, `to`           | Requires auth; `403` if the caller isn't a member. `from`/`to` are any `strtotime()`-parseable bound (`400` if either fails to parse) — every event overlapping that range. No single-event-by-id GET route exists at all; this list endpoint (with its own server-side redaction — see "Household calendar" below) is the only read path. Returns `{"events": [...]}`, each either a full row (`{"id","household_id","created_by_user_id","created_by_username","title","description","starts_at","ends_at","location","responsible_user_id","responsible_username","visibility","created_at","updated_at"}`) or, for a `busy` event of another member's, a redacted `{"id","household_id","starts_at","ends_at","visibility"}` with no other keys present. |
+| POST   | `/households/calendar`    | `{"household_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility": "private"\|"busy"\|"public"}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `description`/`location`: ≤2000/≤255 chars; `starts_at`/`ends_at`: any `strtotime()`-parseable value, normalized to `Y-m-d H:i:s`, `400` if either fails to parse or `ends_at` isn't after `starts_at`; `responsible_user_id`, if given, must be a member of the household. `400` on any validation failure. Returns `{"event"}` (unredacted, the caller's own). |
+| POST   | `/households/calendar/update` | `{"event_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility"}` | Requires auth. `404` if no such event; `403` if the caller isn't a member of its household, or is but didn't create the event — only the creator may edit it, same as notes. Same validation as create. Returns `{"event"}`. |
+| POST   | `/households/calendar/delete` | `{"event_id"}`                                | Requires auth. Same `404`/`403` rules as update. |
 | GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. One row per task in the household (per assignee, for an `"everyone"`-mode task's concurrent copies) — the single soonest-due *pending* instance, not every instance cron may have generated (see "Task/chore tracking" below). Returns `{"tasks": [{"id","task_id","household_id","title","description","assignment_mode","priority","assigned_to_user_id","assigned_to_username","assignees","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's; `assigned_to_user_id`/`assigned_to_username` are *this instance's own* assignee (only ever set for one of an `'everyone'`-mode task's per-assignee copies, see "Task/chore tracking" below), `assignees` is the full `[{"id","username"}, ...]` list for the parent task regardless of mode; `due_at` is `null` for an open-ended task (see "Open-ended tasks" below), ordered ahead of every dated instance, highest `priority` first. |
 | GET    | `/households/tasks/finished` | query param `household_id`                      | Requires auth; `403` if the caller isn't a member. Every instance resolved *today* in the household, completed or skipped alike, newest first — the household Tasks tab's "Show finished today" list, the counterpart to `GET /households/tasks` above (which drops a resolved instance the moment it's no longer pending). Same joined row shape, plus `completed_by_username` (who resolved it — set for both `"done"` and `"skipped"`). |
 | POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "notes"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?, "priority"?: "low"\|"medium"\|"high"\|"critical", "source_type"?: "home_improvement_project"\|"maintenance", "source_id"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `notes` (≤2000 chars, like `description`) seeds the created instance's own notes — general notes on this occurrence, not tied to completing/skipping it (see "Notes on a task" below); every id in `assigned_to_user_ids` must be a member of the household; `assignment_mode` defaults to `"anyone"` and must be `"everyone"` only with at least one assignee (`400` otherwise); `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at`, if given, must be `YYYY-MM-DD` (`400` otherwise); omitted for a *recurring* task it defaults to today (still needs a real anchor date), omitted for a *one-off* task it's left `null` — an open-ended task with no deadline (see "Open-ended tasks" below). `priority` only really matters for an open-ended task (defaults to `"medium"` there if not given) — stored as given otherwise, `400` if not one of the four values. `source_type`/`source_id` (issue #11's own follow-up) tag this task as a home improvement project's own task (`source_type = "home_improvement_project"`, `source_id` a real project in this same household — `404` otherwise) or a maintenance item (`source_type = "maintenance"`, `source_id` omitted, and `recurrence_frequency` required — `400` otherwise); omit both for an ordinary task, unchanged from before this follow-up. See "Home improvement projects and maintenance" below. `400` on any other validation failure. Creates the definition *and* its first instance(s) in one call — one shared instance for `"anyone"` mode, one per assignee for `"everyone"` mode (all sharing the same initial `notes`, if given). Returns `{"tasks": [...]}` (an *array*, since `"everyone"` mode can create more than one instance — each in the same joined shape as the list above). |
@@ -421,6 +426,78 @@ a matching `household_shopping_items` row for each (via
 copied over again next time. Checking the pantry and flagging what's low,
 then clicking this once, is the whole intended workflow.
 
+## Household calendar
+
+Single-occurrence household events (issue #13), `household_calendar_events`
+— unlike pets/the shopping list/staples, this table carries privacy-bearing
+content, so it follows notes' permission model instead: any member can
+create an event, but only its own creator can edit or delete it
+(`requireOwnCalendarEvent()`, `HouseholdService`).
+
+**Three visibility tiers**, a superset of notes' plain `private`/`public`
+split — `busy` sits in between:
+
+- **`private`** — visible only to its creator. Excluded entirely at the SQL
+  level for every other member (`HouseholdCalendarEventRepository::
+  listVisibleTo()`'s `WHERE` clause), the same defense-in-depth
+  `HouseholdNoteRepository::listVisibleTo()` already uses for private
+  notes — never even fetched into PHP for anyone else, let alone returned.
+- **`busy`** — every other member can see that the time slot is blocked,
+  but none of the event's details. Unlike `private`, a `busy` event of
+  another member's *is* fetched (it has to be, to show the blocked slot at
+  all) but then redacted down to just `{"id","household_id","starts_at",
+  "ends_at","visibility"}` — no title, description, location, responsible
+  party, or who created it — by `HouseholdService::redactCalendarEvent()`
+  before the response ever leaves the server. This redaction is what makes
+  `busy` different from a plain filter: the row exists in the response, just
+  stripped, so the calendar UI can still render "busy" blocks on a week
+  view for slots the caller doesn't own.
+- **`public`** — every member sees the full event, same as a public note.
+
+Redaction happens exclusively in `HouseholdService`, never left to the
+frontend to enforce — the same guarantee "Household settings, notes, and
+pets" above already documents for notes. There is deliberately **no
+single-event-by-id GET route at all** — `GET /households/calendar`'s
+date-range list (with per-row redaction already applied) is the only read
+path that exists, which by construction rules out "fetch a specific busy
+or private event directly by its id" as a leak vector, rather than needing
+a separate check on a route that doesn't exist to leak through in the
+first place.
+
+**Settled explicitly for v1**, per the issue's own open questions:
+
+- **No recurrence.** Every event is a single occurrence — no "repeat
+  weekly" concept. Revisit if a real need shows up; the task/chore system
+  already owns recurring commitments (see "Task/chore tracking" below),
+  and a calendar-specific recurrence model is easy to add later without
+  reworking what's here.
+- **One responsible party, not a multi-attendee list.**
+  `responsible_user_id` (nullable, `ON DELETE SET NULL` like
+  `household_tasks.assigned_to_user_id` — removing that member shouldn't
+  delete the event) is the person accountable for the event, which may
+  differ from whoever created it. No RSVP/multi-attendee model exists yet.
+- **Plain wall-clock `DATETIME`, no timezone conversion.** `starts_at`/
+  `ends_at` are a single household-local time shared by every member —
+  the same no-per-user-timezone assumption every other date/time column in
+  this schema already makes (e.g. `household_task_instances.due_at`). The
+  frontend's `datetime-local` inputs are read and written as plain local
+  strings, with no UTC round-trip anywhere in the path.
+- **A shared top-level create/edit form, not per-row inline editing.**
+  Every other tracker in this app edits a row in place
+  (`renderXEditForm(li, item, householdId)` in `web-static/js/main.js`);
+  the calendar form's much higher field count (title, description, start,
+  end, location, responsible party, visibility) made a single shared
+  form clearer than seven inline fields opening inside a list row, and
+  the issue's own proposed shape already called for "a create/edit form"
+  (singular). Submitting it branches on whether an event is currently
+  being edited (`editingCalendarEventId` in `main.js`) to `POST` to either
+  `/households/calendar` or `/households/calendar/update`.
+
+The Calendar tab shows one week at a time (Monday-to-Monday,
+`startOfWeek()` in `main.js`), with Previous/Next buttons walking
+`currentCalendarRangeStart` forward/backward 7 days and re-fetching; it
+resets to the current week each time a household is (re)opened.
+
 ## Task/chore tracking
 
 One-off tasks and recurring chores (issue #12), assignable to any number of
@@ -644,9 +721,11 @@ which — as its last step — also reloads the dashboard, so either tab stays
 in sync regardless of where a task was completed from.
 
 Issue #20 also calls for today's calendar events (issue #13) and overdue
-maintenance (issue #11) to appear here; neither tracker exists yet, so
-those sections are left out rather than stubbed in, and this dashboard
-pulls from tasks alone for now. For the same reason it stays a distinct
+maintenance (issue #11) to appear here; neither tracker existed yet at the
+time this dashboard shipped, so those sections were left out rather than
+stubbed in, and it still pulls from tasks alone — wiring in today's
+calendar events is a natural follow-up now that #13 exists, but hasn't
+been done yet. For the same reason it stays a distinct
 tab rather than becoming the post-login landing page (app.html's household
 list) — the issue's own suggestion is to promote it "once enough trackers
 exist to make it worth showing."

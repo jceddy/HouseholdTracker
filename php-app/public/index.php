@@ -21,12 +21,14 @@ use HouseholdTracker\Config;
 use HouseholdTracker\Database\Connection;
 use HouseholdTracker\Database\MigrationRunner;
 use HouseholdTracker\Household\AlreadyMemberException;
+use HouseholdTracker\Household\CalendarEventNotFoundException;
 use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\HomeImprovementService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
+use HouseholdTracker\Household\NotAuthorizedToModifyCalendarEventException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotHouseholdOwnerException;
 use HouseholdTracker\Household\PetNotFoundException;
@@ -41,6 +43,7 @@ use HouseholdTracker\Mail\Mailer;
 use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
 use HouseholdTracker\Repository\HomeImprovementProjectRepository;
+use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -284,7 +287,8 @@ $households = new HouseholdService(
     new HouseholdNoteRepository(),
     new HouseholdPetRepository(),
     new HouseholdShoppingItemRepository(),
-    new HouseholdStapleItemRepository()
+    new HouseholdStapleItemRepository(),
+    new HouseholdCalendarEventRepository()
 );
 
 $taskInstances = new HouseholdTaskInstanceRepository();
@@ -856,6 +860,93 @@ if ($path === '/households/notes/delete' && $method === 'POST') {
     } catch (NoteNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAuthorizedToModifyNoteException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/calendar' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+    $from = strtotime((string) ($_GET['from'] ?? ''));
+    $to = strtotime((string) ($_GET['to'] ?? ''));
+
+    if ($from === false || $to === false) {
+        respond(400, ['status' => 'error', 'message' => 'Valid from and to query parameters are required.']);
+    }
+
+    try {
+        $events = $households->listCalendarEvents(
+            (int) $currentUser['id'],
+            $householdId,
+            date('Y-m-d H:i:s', $from),
+            date('Y-m-d H:i:s', $to)
+        );
+        respond(200, ['status' => 'ok', 'events' => $events]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/calendar' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $event = $households->createCalendarEvent(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            (string) ($body['starts_at'] ?? ''),
+            (string) ($body['ends_at'] ?? ''),
+            isset($body['location']) ? (string) $body['location'] : null,
+            isset($body['responsible_user_id']) && $body['responsible_user_id'] !== null ? (int) $body['responsible_user_id'] : null,
+            (string) ($body['visibility'] ?? '')
+        );
+        respond(201, ['status' => 'ok', 'event' => $event]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/calendar/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $event = $households->updateCalendarEvent(
+            (int) $currentUser['id'],
+            (int) ($body['event_id'] ?? 0),
+            (string) ($body['title'] ?? ''),
+            isset($body['description']) ? (string) $body['description'] : null,
+            (string) ($body['starts_at'] ?? ''),
+            (string) ($body['ends_at'] ?? ''),
+            isset($body['location']) ? (string) $body['location'] : null,
+            isset($body['responsible_user_id']) && $body['responsible_user_id'] !== null ? (int) $body['responsible_user_id'] : null,
+            (string) ($body['visibility'] ?? '')
+        );
+        respond(200, ['status' => 'ok', 'event' => $event]);
+    } catch (CalendarEventNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToModifyCalendarEventException | NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/calendar/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteCalendarEvent((int) $currentUser['id'], (int) ($body['event_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (CalendarEventNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToModifyCalendarEventException | NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
