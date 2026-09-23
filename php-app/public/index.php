@@ -26,6 +26,7 @@ use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\ContactNotFoundException;
 use HouseholdTracker\Household\HomeImprovementService;
 use HouseholdTracker\Household\HouseholdMeetingService;
+use HouseholdTracker\Household\HouseholdPollService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\MeetingNotFoundException;
@@ -35,6 +36,8 @@ use HouseholdTracker\Household\NotAuthorizedToModifyCalendarEventException;
 use HouseholdTracker\Household\NotAuthorizedToModifyNoteException;
 use HouseholdTracker\Household\NotHouseholdOwnerException;
 use HouseholdTracker\Household\PetNotFoundException;
+use HouseholdTracker\Household\PollClosedException;
+use HouseholdTracker\Household\PollNotFoundException;
 use HouseholdTracker\Household\ProjectNotFoundException;
 use HouseholdTracker\Household\ShoppingItemNotFoundException;
 use HouseholdTracker\Household\StapleItemNotFoundException;
@@ -53,6 +56,7 @@ use HouseholdTracker\Repository\HouseholdMeetingRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
+use HouseholdTracker\Repository\HouseholdPollRepository;
 use HouseholdTracker\Repository\HouseholdRepository;
 use HouseholdTracker\Repository\HouseholdShoppingItemRepository;
 use HouseholdTracker\Repository\HouseholdStapleItemRepository;
@@ -345,6 +349,11 @@ $meetingService = new HouseholdMeetingService(
     new HouseholdMemberRepository(),
     $meetings,
     $taskInstances
+);
+
+$pollService = new HouseholdPollService(
+    new HouseholdMemberRepository(),
+    new HouseholdPollRepository()
 );
 
 $accountExport = new AccountExportService(
@@ -1623,6 +1632,101 @@ if ($path === '/households/meetings/delete' && $method === 'POST') {
         $meetingService->deleteMeeting((int) $currentUser['id'], (int) ($body['meeting_id'] ?? 0));
         respond(200, ['status' => 'ok']);
     } catch (MeetingNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'polls' => $pollService->listPolls((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls/detail' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+
+    try {
+        $poll = $pollService->getPoll((int) $currentUser['id'], (int) ($_GET['poll_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'poll' => $poll]);
+    } catch (PollNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $poll = $pollService->createPoll(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['question'] ?? ''),
+            (bool) ($body['allow_multiple_selections'] ?? false),
+            isset($body['closes_at']) ? (string) $body['closes_at'] : null,
+            isset($body['options']) && is_array($body['options']) ? $body['options'] : []
+        );
+        respond(201, ['status' => 'ok', 'poll' => $poll]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls/vote' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $poll = $pollService->vote(
+            (int) $currentUser['id'],
+            (int) ($body['poll_id'] ?? 0),
+            isset($body['option_ids']) && is_array($body['option_ids']) ? $body['option_ids'] : []
+        );
+        respond(200, ['status' => 'ok', 'poll' => $poll]);
+    } catch (PollNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (PollClosedException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls/close' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $poll = $pollService->closePoll((int) $currentUser['id'], (int) ($body['poll_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'poll' => $poll]);
+    } catch (PollNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/polls/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $pollService->deletePoll((int) $currentUser['id'], (int) ($body['poll_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (PollNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);

@@ -60,6 +60,7 @@
             <button type="button" class="tab-button" data-tab="staples" role="tab" aria-selected="false">Staples</button>
             <button type="button" class="tab-button" data-tab="calendar" role="tab" aria-selected="false">Calendar</button>
             <button type="button" class="tab-button" data-tab="meetings" role="tab" aria-selected="false">Meetings</button>
+            <button type="button" class="tab-button" data-tab="polls" role="tab" aria-selected="false">Polls</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -437,6 +438,30 @@
                 </label>
                 <button type="submit">Log meeting</button>
                 <p id="household-meeting-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-polls" role="tabpanel" hidden>
+            <ul id="household-polls-list"></ul>
+
+            <form id="household-poll-form">
+                <label>Question
+                    <input type="text" id="household-poll-question" name="question" required maxlength="500">
+                </label>
+                <fieldset class="checkbox-fieldset">
+                    <legend>Options</legend>
+                    <div id="household-poll-options" class="poll-option-entries"></div>
+                    <button type="button" id="household-poll-add-option" class="button--compact">+ Add option</button>
+                </fieldset>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="household-poll-allow-multiple" name="allow_multiple_selections">
+                    Allow selecting multiple options
+                </label>
+                <label>Closes at (optional)
+                    <input type="datetime-local" id="household-poll-closes-at" name="closes_at">
+                </label>
+                <button type="submit">Create poll</button>
+                <p id="household-poll-message" class="message" hidden></p>
             </form>
         </div>
 

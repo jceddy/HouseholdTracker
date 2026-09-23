@@ -254,6 +254,22 @@ above remains the only way migrations reach the deployed database.
   (see `0008`'s own comment). See "Household meetings" in
   `php-app/README.md`.
 
+- **Household polls** (`0037`, issue #27): `household_polls`
+  (`question`, `allow_multiple_selections` `TINYINT(1)`, `status`
+  `ENUM('open', 'closed')`, `closes_at` nullable `DATETIME` for an
+  optional auto-expiry); `household_poll_options`, a fixed-at-creation
+  list (`option_text`, `display_order`); `household_poll_votes`
+  (`poll_id`, `option_id`, `user_id`, unique on all three so a user can't
+  double-vote the same option), always wholesale-replaced per user per
+  poll (`HouseholdPollRepository::replaceVotes()`) rather than diffed,
+  same shape as `household_meeting_attendees`/`household_task_assignees`.
+  Same no-privacy-tiers permission model as `household_contacts`/
+  `household_meetings` -- and votes themselves aren't anonymous either,
+  unlike `household_notes`. Whether a poll still accepts votes is
+  computed from `status`/`closes_at` where it matters rather than stored
+  as its own flag, so no cron job is needed to close an expired poll. See
+  "Household polls" in `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.
