@@ -41,7 +41,7 @@ database.
     plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11); `HouseholdMeetingService` (meetings —
-    issue #8).
+    issue #8); `HouseholdPollService` (household polls — issue #27).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -147,6 +147,12 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/meetings`    | `{"household_id", "occurred_at", "attendee_user_ids"?: [int], "notes"?}` | Requires auth; `403` if the caller isn't a member. `occurred_at`: any `strtotime()`-parseable date/time (`400` if it fails to parse), normalized to `Y-m-d H:i:s`; every id in `attendee_user_ids` must be a member of the household (`400` otherwise); `notes`: ≤20,000 chars, like a note's own `body`. `400` on any other validation failure. Returns `{"meeting"}`. |
 | POST   | `/households/meetings/update` | `{"meeting_id", "occurred_at", "attendee_user_ids"?, "notes"?}` | Requires auth. `404` if no such meeting; `403` if the caller isn't a member of its household. Any member may update it — see "Household meetings" below. Same validation as create; `attendee_user_ids`, if given, wholesale-replaces the meeting's existing attendee list rather than merging with it. |
 | POST   | `/households/meetings/delete` | `{"meeting_id"}`                               | Requires auth. Same `404`/`403` rules as `/households/meetings/update`. Does not delete the meeting's own linked tasks — see "Household meetings" below. |
+| GET    | `/households/polls`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every poll in the household, most recently created first. Returns `{"polls": [{"id","household_id","created_by_user_id","question","allow_multiple_selections","status","closes_at","created_at","updated_at","options": [{"id","option_text","display_order","votes": [{"id","username"}, ...]}, ...]}]}` — votes are not anonymous, so each option's `votes` array is both the result display and (checking for the caller's own id) whether they've already voted for it. |
+| GET    | `/households/polls/detail` | query param `poll_id`                              | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household. Returns `{"poll"}`, same shape as one entry of `GET /households/polls`. |
+| POST   | `/households/polls`       | `{"household_id", "question", "allow_multiple_selections"?: bool, "closes_at"?, "options": [string]}` | Requires auth; `403` if the caller isn't a member. `question`: 1-500 chars. `options`: 2-20 non-blank entries after trimming, each ≤200 chars (`400` otherwise) — fixed at creation, no adding options later (see "Household polls" below). `closes_at`, if given, must be a `strtotime()`-parseable date/time strictly in the future (`400` otherwise), normalized to `Y-m-d H:i:s`; omit for a poll that's only closed manually. `400` on any other validation failure. Returns `{"poll"}`. |
+| POST   | `/households/polls/vote` | `{"poll_id", "option_ids": [int]}`                  | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household; `409` if the poll is closed or past its `closes_at`. `option_ids` becomes the caller's *entire* vote set for this poll, wholesale-replacing whatever they'd voted for before (an empty array clears their vote) — see "Household polls" below. `400` if `option_ids` has more than one entry on a poll with `allow_multiple_selections = false`, or if any id doesn't belong to this poll. Returns `{"poll"}`. |
+| POST   | `/households/polls/close` | `{"poll_id"}`                                       | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household. Any member may close it — see "Household polls" below. Returns `{"poll"}`. |
+| POST   | `/households/polls/delete` | `{"poll_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/polls/close`. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -929,6 +935,48 @@ tasks, their `source_type`/`source_id` now pointing at nothing in
 particular, the same behavior settled on for a deleted home improvement
 project's own tasks (see above). A member who wants those tasks gone too
 can delete them the normal way.
+
+## Household polls
+
+A lightweight "ask the household, let them vote" mechanism (issue #27,
+`household_polls`/`household_poll_options`/`household_poll_votes`) for any
+decision, not tied to any other tracker. Same "no privacy tiers, any
+member can add/edit/remove" permission model as pets/contacts/meetings —
+a poll is shared household information, not one member's private content.
+
+**Votes are not anonymous** — every option's vote list names who voted
+for it, matching this app's general default (contrast with
+household_notes/private calendar events). Results are always visible,
+including before the caller has voted themselves — v1 settles the issue's
+own "hide results until you vote" open question in favor of the simpler
+always-visible behavior.
+
+**Options are fixed at creation** (2-20, `POST /households/polls`'s own
+`options` array) — no crowd-sourced additions after the fact, settling
+another of the issue's open questions in favor of the simpler v1.
+Similarly, recurring/periodic polls (e.g. an automatically-recreated
+"what's for dinner" poll every Monday) are out of scope for v1 — a poll
+is a one-off, created manually.
+
+**Voting is a wholesale replace, not an add/remove-one-vote action** —
+`POST /households/polls/vote`'s `option_ids` becomes the caller's entire
+vote set for that poll (`HouseholdPollRepository::replaceVotes()`), the
+same "submit your whole desired state, we'll replace it" shape this app
+already uses for a meeting's attendees and a task's assignees. This also
+means "change my vote" needs no separate action — just vote again.
+`allow_multiple_selections` controls whether more than one option may be
+selected at once; voting for more than one on a single-select poll is a
+`400`.
+
+**`closes_at` is an optional auto-expiry, not a stored open/closed
+flag** — whether a poll is still accepting votes is computed from
+`status`/`closes_at` at the moment it matters (`HouseholdPollService::
+requireOpenForVoting()`, checked server-side on every vote; the frontend
+computes the same thing for display, the same `isTaskOverdue()`-style
+"derive it from raw data where it's needed" approach used throughout this
+app) rather than needing a cron job to flip a row once the deadline
+passes. `POST /households/polls/close` closes a poll manually regardless
+of `closes_at`.
 
 ## LLM usage (Fireworks AI)
 

@@ -302,6 +302,8 @@
         closeProjectDetail();
         // Same reset idea, for a still-open meeting detail panel.
         closeMeetingDetail();
+        // Same reset idea, for the poll creation form's option rows.
+        resetPollOptionRows(document.getElementById('household-poll-options'));
         // Same reset idea, for the calendar's own edit-in-progress state
         // and its "which week" position.
         currentCalendarRangeStart = startOfWeek(new Date());
@@ -317,6 +319,7 @@
         await loadStaples(householdId);
         await loadCalendar(householdId);
         await loadMeetings(householdId);
+        await loadPolls(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -534,6 +537,40 @@
         }
 
         return entries;
+    }
+
+    // buildPollOptionRow(...)/collectPollOptionTexts(...)/
+    // resetPollOptionRows(...) - same repeatable-row shape as
+    // buildContactEntryRow()/collectContactEntries(), but for a poll's
+    // fixed-at-creation option list (issue #27) rather than phones/emails.
+    // A blank row left empty at submit time is silently dropped, same as
+    // an abandoned contact entry row.
+    function buildPollOptionRow(containerEl, value) {
+        const row = document.createElement('div');
+        row.className = 'form-row poll-option-row';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 200;
+        input.placeholder = 'Option';
+        input.value = value || '';
+        row.appendChild(input);
+        row.appendChild(buildIconButton(DELETE_ICON, 'Remove', () => row.remove()));
+        containerEl.appendChild(row);
+    }
+
+    function collectPollOptionTexts(containerEl) {
+        return Array.from(containerEl.querySelectorAll('input[type="text"]'))
+            .map((input) => input.value.trim())
+            .filter((value) => value !== '');
+    }
+
+    // resetPollOptionRows(...) - reseeds two blank option rows, the
+    // minimum a poll needs (HouseholdPollService::MIN_OPTIONS), so the
+    // create form always starts ready to fill in rather than empty.
+    function resetPollOptionRows(containerEl) {
+        containerEl.innerHTML = '';
+        buildPollOptionRow(containerEl);
+        buildPollOptionRow(containerEl);
     }
 
     // buildContactLabelElement(...) - same info formatCalendarEventLabel-
@@ -911,6 +948,25 @@
     // apply to the same task.
     function isDueToday(task) {
         return task.due_at === todayIso();
+    }
+
+    // isPollOpen(...)/formatPollStatus(...) - "still accepting votes" is
+    // computed here from status/closes_at, same idea as isTaskOverdue() --
+    // the backend doesn't store a separate open/closed-by-expiry flag (see
+    // migration 0037's own comment). fromMysqlDateTime() is declared
+    // further down this file but hoisted, so it's callable from here.
+    function isPollOpen(poll) {
+        if (poll.status !== 'open') {
+            return false;
+        }
+        return !poll.closes_at || fromMysqlDateTime(poll.closes_at) > new Date();
+    }
+
+    function formatPollStatus(poll) {
+        if (!isPollOpen(poll)) {
+            return 'Closed';
+        }
+        return poll.closes_at ? `Open — closes ${fromMysqlDateTime(poll.closes_at).toLocaleString()}` : 'Open';
     }
 
     // formatAssigneesBit(...) - shared by formatTaskLabel()/
@@ -1941,6 +1997,125 @@
         document.getElementById('household-meeting-detail').hidden = true;
     }
 
+    async function loadPolls(householdId) {
+        const { response, body } = await apiRequest('/households/polls?household_id=' + householdId);
+        const list = document.getElementById('household-polls-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const poll of body.polls) {
+            list.appendChild(renderPollItem(poll, householdId));
+        }
+    }
+
+    // renderPollItem(...) - a poll's question, status, and its options as
+    // a radio group (single-select) or checkbox group (allow_multiple_
+    // selections), each option labeled with its live vote count and, since
+    // votes aren't anonymous (migration 0037), who voted for it. Own
+    // inputs are pre-checked from option.votes -- same "the voter list
+    // doubles as the current user's own selection" idea as attendee_ids
+    // pre-checking a meeting's attendee checkboxes. Voting inputs/the Vote
+    // button are omitted once the poll is closed (or past closes_at) --
+    // results still show, just not editable.
+    function renderPollItem(poll, householdId) {
+        const li = document.createElement('li');
+        li.className = 'poll-item';
+
+        const question = document.createElement('strong');
+        question.textContent = poll.question;
+        li.appendChild(question);
+
+        const status = document.createElement('p');
+        status.textContent = formatPollStatus(poll);
+        li.appendChild(status);
+
+        const open = isPollOpen(poll);
+        const inputType = poll.allow_multiple_selections ? 'checkbox' : 'radio';
+        const inputName = `poll-${poll.id}-option`;
+
+        const voteForm = document.createElement('form');
+        voteForm.className = 'poll-vote-form';
+
+        for (const option of poll.options) {
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            const input = document.createElement('input');
+            input.type = inputType;
+            input.name = inputName;
+            input.value = String(option.id);
+            input.checked = option.votes.some((voter) => voter.id === user.id);
+            input.disabled = !open;
+            label.appendChild(input);
+            const voteCount = option.votes.length;
+            const voterNames = option.votes.map((voter) => voter.username).join(', ');
+            label.appendChild(document.createTextNode(
+                ` ${option.option_text} — ${voteCount} vote${voteCount === 1 ? '' : 's'}`
+                + (voterNames ? ` (${voterNames})` : '')
+            ));
+            voteForm.appendChild(label);
+        }
+
+        const voteMessageEl = document.createElement('p');
+        voteMessageEl.className = 'message';
+        voteMessageEl.hidden = true;
+
+        if (open) {
+            const voteButton = document.createElement('button');
+            voteButton.type = 'submit';
+            voteButton.textContent = 'Vote';
+            voteForm.appendChild(voteButton);
+            voteForm.appendChild(voteMessageEl);
+
+            voteForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                voteMessageEl.hidden = true;
+                const optionIds = Array.from(voteForm.querySelectorAll(`input[name="${inputName}"]:checked`))
+                    .map((input) => Number(input.value));
+
+                const { response, body } = await apiRequest('/households/polls/vote', {
+                    method: 'POST',
+                    body: JSON.stringify({ poll_id: poll.id, option_ids: optionIds }),
+                });
+
+                if (response.ok) {
+                    await loadPolls(householdId);
+                    return;
+                }
+
+                voteMessageEl.textContent = (body && body.message) || 'Could not save your vote.';
+                voteMessageEl.className = 'message message--error';
+                voteMessageEl.hidden = false;
+            });
+        }
+
+        li.appendChild(voteForm);
+
+        const actions = document.createElement('div');
+        actions.className = 'li-actions';
+        if (open) {
+            actions.appendChild(buildButton('Close poll', async () => {
+                await apiRequest('/households/polls/close', {
+                    method: 'POST',
+                    body: JSON.stringify({ poll_id: poll.id }),
+                });
+                await loadPolls(householdId);
+            }));
+        }
+        actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+            await apiRequest('/households/polls/delete', {
+                method: 'POST',
+                body: JSON.stringify({ poll_id: poll.id }),
+            });
+            await loadPolls(householdId);
+        }));
+        li.appendChild(actions);
+
+        return li;
+    }
+
     // renderMeetingDetailTasks(...) - a meeting's own linked tasks
     // (household_tasks tagged source_type = 'meeting', source_id = this
     // meeting), reusing the exact same formatTaskLabel()/Complete/Edit/
@@ -2551,6 +2726,40 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not log meeting.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-poll-add-option').addEventListener('click', () => {
+        buildPollOptionRow(document.getElementById('household-poll-options'));
+    });
+
+    document.getElementById('household-poll-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-poll-message');
+        messageEl.hidden = true;
+        const optionsContainer = document.getElementById('household-poll-options');
+
+        const { response, body } = await apiRequest('/households/polls', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                question: form.question.value,
+                allow_multiple_selections: document.getElementById('household-poll-allow-multiple').checked,
+                closes_at: document.getElementById('household-poll-closes-at').value,
+                options: collectPollOptionTexts(optionsContainer),
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            resetPollOptionRows(optionsContainer);
+            await loadPolls(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not create poll.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });
