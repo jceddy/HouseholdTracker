@@ -1,6 +1,7 @@
 (async function () {
     let currentHouseholdId = null;
     let currentMembers = [];
+    let currentContacts = [];
     // currentCalendarRangeStart -- the Monday of the week currently shown
     // in the Calendar tab; reset to the current week each time a household
     // is (re)opened, walked forward/backward a week at a time by the
@@ -298,6 +299,7 @@
         cancelCalendarEventEdit();
         await loadMembers(householdId);
         await loadNotes(householdId);
+        await loadContacts(householdId);
         await loadPets(householdId);
         await loadTasks(householdId);
         await loadProjects(householdId);
@@ -453,6 +455,136 @@
         li.appendChild(form);
     }
 
+    // populateVetSelect(...) - mirrors populateResponsibleSelect(), for the
+    // pet form's "Vet" dropdown -- built from currentContacts rather than
+    // currentMembers, since a vet is a household_contacts row (issue #16),
+    // not a member.
+    function populateVetSelect(selectEl, selectedContactId) {
+        selectEl.innerHTML = '';
+        const blankOption = document.createElement('option');
+        blankOption.value = '';
+        blankOption.textContent = '(none)';
+        selectEl.appendChild(blankOption);
+        for (const contact of currentContacts) {
+            const option = document.createElement('option');
+            option.value = String(contact.id);
+            option.textContent = contact.name;
+            option.selected = selectedContactId != null && contact.id === selectedContactId;
+            selectEl.appendChild(option);
+        }
+    }
+
+    async function loadContacts(householdId) {
+        const { response, body } = await apiRequest('/households/contacts?household_id=' + householdId);
+        const list = document.getElementById('household-contacts-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        currentContacts = body.contacts;
+        populateVetSelect(document.getElementById('household-pet-vet-contact'));
+
+        for (const contact of body.contacts) {
+            const label = contact.category ? `${contact.name} (${contact.category})` : contact.name;
+            const { li, actions } = buildListItem(label);
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderContactEditForm(li, contact, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/contacts/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ contact_id: contact.id }),
+                });
+                await loadContacts(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
+    // renderContactEditForm(...) - same inline-edit pattern as
+    // renderPetEditForm(); any household member may edit a contact (a
+    // shared resource, not a per-user one), same as pets.
+    function renderContactEditForm(li, contact, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        function textField(labelText, value, maxLength, type) {
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            const input = document.createElement('input');
+            input.type = type || 'text';
+            input.value = value || '';
+            input.maxLength = maxLength;
+            label.appendChild(input);
+            form.appendChild(label);
+            return input;
+        }
+
+        const nameInput = textField('Name', contact.name, 150);
+        nameInput.required = true;
+        const categoryInput = textField('Category', contact.category, 50);
+        const phoneInput = textField('Phone', contact.phone, 50);
+        const emailInput = textField('Email', contact.email, 255, 'email');
+        const addressInput = textField('Address', contact.address, 255);
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = contact.notes || '';
+        notesTextarea.maxLength = 2000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadContacts(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/contacts/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    contact_id: contact.id,
+                    name: nameInput.value,
+                    category: categoryInput.value,
+                    phone: phoneInput.value,
+                    email: emailInput.value,
+                    address: addressInput.value,
+                    notes: notesTextarea.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadContacts(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save contact.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
     async function loadPets(householdId) {
         const { response, body } = await apiRequest('/households/pets?household_id=' + householdId);
         const list = document.getElementById('household-pets-list');
@@ -463,7 +595,10 @@
         }
 
         for (const pet of body.pets) {
-            const details = [pet.species, pet.breed, pet.birthday].filter(Boolean).join(', ');
+            const vetContact = currentContacts.find((contact) => contact.id === pet.vet_contact_id);
+            const details = [pet.species, pet.breed, pet.birthday, vetContact ? `Vet: ${vetContact.name}` : null]
+                .filter(Boolean)
+                .join(', ');
             const label = details ? `${pet.name} (${details})` : pet.name;
             const { li, actions } = buildListItem(label);
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderPetEditForm(li, pet, householdId)));
@@ -520,6 +655,13 @@
         notesLabel.appendChild(notesTextarea);
         form.appendChild(notesLabel);
 
+        const vetLabel = document.createElement('label');
+        vetLabel.textContent = 'Vet';
+        const vetSelect = document.createElement('select');
+        populateVetSelect(vetSelect, pet.vet_contact_id);
+        vetLabel.appendChild(vetSelect);
+        form.appendChild(vetLabel);
+
         const row = document.createElement('div');
         row.className = 'form-row';
         const saveButton = document.createElement('button');
@@ -551,6 +693,7 @@
                     breed: breedInput.value,
                     birthday: birthdayInput.value,
                     notes: notesTextarea.value,
+                    vet_contact_id: vetSelect.value ? Number(vetSelect.value) : null,
                 }),
             });
 
@@ -2228,6 +2371,36 @@
         messageEl.hidden = false;
     });
 
+    document.getElementById('household-contact-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-contact-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/contacts', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                category: form.category.value,
+                phone: form.phone.value,
+                email: form.email.value,
+                address: form.address.value,
+                notes: form.notes.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadContacts(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add contact.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
     document.getElementById('household-pet-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -2243,11 +2416,13 @@
                 breed: form.breed.value,
                 birthday: form.birthday.value,
                 notes: form.notes.value,
+                vet_contact_id: form.vet_contact_id.value ? Number(form.vet_contact_id.value) : null,
             }),
         });
 
         if (response.ok) {
             form.reset();
+            populateVetSelect(document.getElementById('household-pet-vet-contact'));
             await loadPets(currentHouseholdId);
             return;
         }

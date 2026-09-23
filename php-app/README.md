@@ -103,9 +103,13 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/notes`       | `{"household_id", "visibility": "private"\|"public", "body"}` | Requires auth; `403` if the caller isn't a member. `body`: 1-20,000 chars, `400` otherwise. Returns `{"note"}`. |
 | POST   | `/households/notes/update` | `{"note_id", "visibility", "body"}`               | Requires auth. `404` if no such note; `403` unless the caller is the note's own author (public notes included — see below). |
 | POST   | `/households/notes/delete` | `{"note_id"}`                                     | Requires auth. Same `404`/`403` rules as `/households/notes/update`. |
-| GET    | `/households/pets`        | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every pet in the household — no privacy tiers, unlike notes. Returns `{"pets": [{"id","household_id","name","species","breed","birthday","notes","created_by_user_id","created_at","updated_at"}]}`. |
-| POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"pet"}`. |
-| POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
+| GET    | `/households/contacts`    | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every contact in the household — no privacy tiers, same as pets. Returns `{"contacts": [{"id","household_id","name","category","phone","email","address","notes","created_by_user_id","created_at","updated_at"}]}`. |
+| POST   | `/households/contacts`    | `{"household_id", "name", "category"?, "phone"?, "email"?, "address"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category` (free text, like the shopping list's): ≤50 chars; `phone`: ≤50 chars; `email`: ≤255 chars, must be a valid address if given; `address`: ≤255 chars; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"contact"}`. |
+| POST   | `/households/contacts/update` | `{"contact_id", "name", "category"?, "phone"?, "email"?, "address"?, "notes"?}` | Requires auth. `404` if no such contact; `403` if the caller isn't a member of that contact's household. Any member may update it — see below. |
+| POST   | `/households/contacts/delete` | `{"contact_id"}`                              | Requires auth. Same `404`/`403` rules as `/households/contacts/update`. |
+| GET    | `/households/pets`        | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every pet in the household — no privacy tiers, unlike notes. Returns `{"pets": [{"id","household_id","name","species","breed","birthday","notes","vet_contact_id","created_by_user_id","created_at","updated_at"}]}`. |
+| POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?, "vet_contact_id"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars; `vet_contact_id`, if given, must be a contact (see `/households/contacts` above) in the same household. `400` on any validation failure. Returns `{"pet"}`. |
+| POST   | `/households/pets/update` | `{"pet_id", "name", "species"?, "breed"?, "birthday"?, "notes"?, "vet_contact_id"?}` | Requires auth. `404` if no such pet; `403` if the caller isn't a member of that pet's household. Any member may update it — see below. |
 | POST   | `/households/pets/delete` | `{"pet_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/pets/update`. |
 | GET    | `/households/shopping-list` | query param `household_id`                       | Requires auth; `403` if the caller isn't a member. Returns `{"needed": [...], "recently_purchased": [...]}` — items nobody's bought yet (oldest-added first) and the most recent 25 bought (newest first), same joined row shape for both: `{"id","household_id","name","quantity","category","added_by_user_id","purchased_at","purchased_by_user_id","created_at"}`. |
 | POST   | `/households/shopping-list` | `{"household_id", "name", "quantity"?, "category"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `quantity`/`category` (free text, e.g. `"2 lbs"`/`"Produce"` — no fixed list): ≤50 chars each. `400` on any validation failure. Returns `{"item"}`. |
@@ -369,10 +373,46 @@ caller to already be a member of the household in question:
 - **Pets** (`household_pets`) — unlike notes, no privacy tiers: every
   member sees the full pet list, and any member can add, edit, or remove a
   pet (a shared household resource, not a per-user one, same permission
-  model as settings). `vet_contact_id` is deliberately not a column yet —
-  issue #16 (household contacts) hasn't shipped, so there's nothing for it
-  to reference; add it via a follow-up migration once #16 lands rather
-  than shipping a nullable FK to a table that doesn't exist.
+  model as settings). `vet_contact_id` (migration `0031`) is a nullable FK
+  into `household_contacts` (issue #16) — see "Household contacts" below.
+
+## Household contacts
+
+A general-purpose address book (issue #16, `household_contacts`), split off
+from pets rather than a `vet_name`/`vet_phone`/`vet_address` field bolted
+onto `household_pets` (which is what issue #7 originally proposed) — the
+vet, a doctor, a plumber, the insurance agent, whatever else a household
+needs to keep track of, in one shared table. Same "no privacy tiers, any
+member can add/edit/remove" permission model as pets — a shared reference
+resource, not privacy-bearing content.
+
+`category` is deliberately freeform text (≤50 chars), not an `ENUM` — the
+same "open-ended list, not a small fixed set worth hardcoding" reasoning
+the shopping list's and staples' own `category` columns already use, one
+of two open questions the issue itself raised (a fixed dropdown vs.
+freeform text); a household's contact categories are too varied to
+usefully enumerate up front. `email`, if given, is validated as a real
+email address (`FILTER_VALIDATE_EMAIL`); `phone`/`address` are free text
+with no format validation, since phone number and address formats vary
+too much to usefully constrain.
+
+**Pets link to a vet contact** (`household_pets.vet_contact_id`, migration
+`0031`) — the issue's other open question (block pets on this landing
+first, or ship pets with simple inline vet fields now and migrate later)
+was settled by neither: `0007` shipped pets with no vet field at all,
+deliberately deferring it rather than adding fields that would need
+migrating away later — see that migration's own comment. `vet_contact_id`
+is nullable, `ON DELETE SET NULL` like `household_tasks.
+assigned_to_user_id`, since deleting a contact shouldn't delete the pet
+that pointed to it. `HouseholdService::
+validateVetContactId()` enforces it must, if given, reference a contact
+already in the *same* household — the same "must belong to this household"
+check calendar events already use for `responsible_user_id`. This is
+meant to be a reusable pattern, not a one-off: a future home improvement
+contractor contact or finances bank/insurance contact could point into
+this same table the same way, rather than each tracker growing its own
+contact fields — not building those now, just noting the shape already
+supports it.
 
 ## Household shopping list
 
