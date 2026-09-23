@@ -15,12 +15,13 @@ final class HouseholdPetRepository
         ?string $species,
         ?string $breed,
         ?string $birthday,
-        ?string $notes
+        ?string $notes,
+        ?int $vetContactId
     ): array {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
-            'INSERT INTO household_pets (household_id, name, species, breed, birthday, notes, created_by_user_id)
-             VALUES (:household_id, :name, :species, :breed, :birthday, :notes, :created_by_user_id)'
+            'INSERT INTO household_pets (household_id, name, species, breed, birthday, notes, vet_contact_id, created_by_user_id)
+             VALUES (:household_id, :name, :species, :breed, :birthday, :notes, :vet_contact_id, :created_by_user_id)'
         );
         $stmt->execute([
             'household_id' => $householdId,
@@ -29,6 +30,7 @@ final class HouseholdPetRepository
             'breed' => $breed,
             'birthday' => $birthday,
             'notes' => $notes,
+            'vet_contact_id' => $vetContactId,
             'created_by_user_id' => $createdByUserId,
         ]);
 
@@ -60,11 +62,12 @@ final class HouseholdPetRepository
         ?string $species,
         ?string $breed,
         ?string $birthday,
-        ?string $notes
+        ?string $notes,
+        ?int $vetContactId
     ): void {
         $stmt = Connection::get()->prepare(
             'UPDATE household_pets
-             SET name = :name, species = :species, breed = :breed, birthday = :birthday, notes = :notes
+             SET name = :name, species = :species, breed = :breed, birthday = :birthday, notes = :notes, vet_contact_id = :vet_contact_id
              WHERE id = :id'
         );
         $stmt->execute([
@@ -73,6 +76,7 @@ final class HouseholdPetRepository
             'breed' => $breed,
             'birthday' => $birthday,
             'notes' => $notes,
+            'vet_contact_id' => $vetContactId,
             'id' => $id,
         ]);
     }

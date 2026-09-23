@@ -1,6 +1,7 @@
 (async function () {
     let currentHouseholdId = null;
     let currentMembers = [];
+    let currentContacts = [];
     // currentCalendarRangeStart -- the Monday of the week currently shown
     // in the Calendar tab; reset to the current week each time a household
     // is (re)opened, walked forward/backward a week at a time by the
@@ -33,10 +34,17 @@
         }
     }
 
+    // buildListItem(...) - label is usually a plain string, but may be a
+    // DOM node instead (e.g. buildContactLabelElement()'s tel:/mailto:
+    // links) when the row needs more than plain text.
     function buildListItem(label) {
         const li = document.createElement('li');
         const labelEl = document.createElement('span');
-        labelEl.textContent = label;
+        if (typeof label === 'string') {
+            labelEl.textContent = label;
+        } else {
+            labelEl.appendChild(label);
+        }
         const actions = document.createElement('span');
         actions.className = 'li-actions';
         li.appendChild(labelEl);
@@ -298,6 +306,7 @@
         cancelCalendarEventEdit();
         await loadMembers(householdId);
         await loadNotes(householdId);
+        await loadContacts(householdId);
         await loadPets(householdId);
         await loadTasks(householdId);
         await loadProjects(householdId);
@@ -453,6 +462,269 @@
         li.appendChild(form);
     }
 
+    // populateVetSelect(...) - mirrors populateResponsibleSelect(), for the
+    // pet form's "Vet" dropdown -- built from currentContacts rather than
+    // currentMembers, since a vet is a household_contacts row (issue #16),
+    // not a member.
+    function populateVetSelect(selectEl, selectedContactId) {
+        selectEl.innerHTML = '';
+        const blankOption = document.createElement('option');
+        blankOption.value = '';
+        blankOption.textContent = '(none)';
+        selectEl.appendChild(blankOption);
+        for (const contact of currentContacts) {
+            const option = document.createElement('option');
+            option.value = String(contact.id);
+            option.textContent = contact.name;
+            option.selected = selectedContactId != null && contact.id === selectedContactId;
+            selectEl.appendChild(option);
+        }
+    }
+
+    const CONTACT_LABELS = ['home', 'mobile', 'work'];
+
+    function capitalizeContactLabel(label) {
+        return label.charAt(0).toUpperCase() + label.slice(1);
+    }
+
+    // buildContactEntryRow(...) - appends one phone/email row (a label
+    // <select> + value <input> + Remove button) to containerEl. kind is
+    // 'phone' or 'email'; entry, if given, pre-fills the row for editing
+    // (contact.phones/contact.emails' own {label, phone|email} shape) --
+    // omitted for a blank row added via "+ Add phone"/"+ Add email".
+    function buildContactEntryRow(containerEl, kind, entry) {
+        const row = document.createElement('div');
+        row.className = 'form-row contact-entry-row';
+
+        const select = document.createElement('select');
+        for (const label of CONTACT_LABELS) {
+            const option = document.createElement('option');
+            option.value = label;
+            option.textContent = capitalizeContactLabel(label);
+            select.appendChild(option);
+        }
+        select.value = (entry && entry.label) || 'home';
+
+        const input = document.createElement('input');
+        input.type = kind === 'email' ? 'email' : 'text';
+        input.maxLength = kind === 'email' ? 255 : 50;
+        input.placeholder = kind === 'email' ? 'Email address' : 'Phone number';
+        input.value = (entry && entry[kind]) || '';
+
+        row.appendChild(select);
+        row.appendChild(input);
+        row.appendChild(buildIconButton(DELETE_ICON, 'Remove', () => row.remove()));
+        containerEl.appendChild(row);
+    }
+
+    // collectContactEntries(...) - reads containerEl's rows back into the
+    // [{label, phone|email}, ...] shape the API expects, skipping any row
+    // whose value was left blank (an added-then-abandoned row).
+    function collectContactEntries(containerEl, kind) {
+        const entries = [];
+        for (const row of containerEl.children) {
+            const value = row.querySelector('input').value.trim();
+            if (value !== '') {
+                entries.push({ label: row.querySelector('select').value, [kind]: value });
+            }
+        }
+
+        return entries;
+    }
+
+    // buildContactLabelElement(...) - same info formatCalendarEventLabel-
+    // style functions build as a plain string elsewhere, but a contact's
+    // phone/email entries render as real tel:/mailto: links here instead,
+    // so tapping one on a phone actually dials/composes rather than just
+    // displaying the number/address as inert text.
+    function buildContactLabelElement(contact) {
+        const container = document.createElement('span');
+        container.appendChild(document.createTextNode(contact.name));
+
+        const detailNodes = [];
+        if (contact.category) {
+            detailNodes.push(document.createTextNode(contact.category));
+        }
+        for (const phone of contact.phones || []) {
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(`${capitalizeContactLabel(phone.label)}: `));
+            const link = document.createElement('a');
+            link.href = 'tel:' + phone.phone;
+            link.textContent = phone.phone;
+            frag.appendChild(link);
+            detailNodes.push(frag);
+        }
+        for (const email of contact.emails || []) {
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(`${capitalizeContactLabel(email.label)}: `));
+            const link = document.createElement('a');
+            link.href = 'mailto:' + email.email;
+            link.textContent = email.email;
+            frag.appendChild(link);
+            detailNodes.push(frag);
+        }
+
+        if (detailNodes.length > 0) {
+            container.appendChild(document.createTextNode(' ('));
+            detailNodes.forEach((node, index) => {
+                if (index > 0) {
+                    container.appendChild(document.createTextNode(', '));
+                }
+                container.appendChild(node);
+            });
+            container.appendChild(document.createTextNode(')'));
+        }
+
+        return container;
+    }
+
+    async function loadContacts(householdId) {
+        const { response, body } = await apiRequest('/households/contacts?household_id=' + householdId);
+        const list = document.getElementById('household-contacts-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        currentContacts = body.contacts;
+        populateVetSelect(document.getElementById('household-pet-vet-contact'));
+
+        for (const contact of body.contacts) {
+            const { li, actions } = buildListItem(buildContactLabelElement(contact));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderContactEditForm(li, contact, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/contacts/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ contact_id: contact.id }),
+                });
+                await loadContacts(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
+    // renderContactEditForm(...) - same inline-edit pattern as
+    // renderPetEditForm(); any household member may edit a contact (a
+    // shared resource, not a per-user one), same as pets.
+    function renderContactEditForm(li, contact, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        function textField(labelText, value, maxLength, type) {
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            const input = document.createElement('input');
+            input.type = type || 'text';
+            input.value = value || '';
+            input.maxLength = maxLength;
+            label.appendChild(input);
+            form.appendChild(label);
+            return input;
+        }
+
+        const nameInput = textField('Name', contact.name, 150);
+        nameInput.required = true;
+        const categoryInput = textField('Category', contact.category, 50);
+
+        const phonesLabel = document.createElement('span');
+        phonesLabel.textContent = 'Phone numbers';
+        form.appendChild(phonesLabel);
+        const phonesContainer = document.createElement('div');
+        phonesContainer.className = 'contact-entries';
+        for (const phone of contact.phones || []) {
+            buildContactEntryRow(phonesContainer, 'phone', phone);
+        }
+        form.appendChild(phonesContainer);
+        const addPhoneButton = document.createElement('button');
+        addPhoneButton.type = 'button';
+        addPhoneButton.className = 'button--compact';
+        addPhoneButton.textContent = '+ Add phone';
+        addPhoneButton.addEventListener('click', () => buildContactEntryRow(phonesContainer, 'phone'));
+        form.appendChild(addPhoneButton);
+
+        const emailsLabel = document.createElement('span');
+        emailsLabel.textContent = 'Email addresses';
+        form.appendChild(emailsLabel);
+        const emailsContainer = document.createElement('div');
+        emailsContainer.className = 'contact-entries';
+        for (const email of contact.emails || []) {
+            buildContactEntryRow(emailsContainer, 'email', email);
+        }
+        form.appendChild(emailsContainer);
+        const addEmailButton = document.createElement('button');
+        addEmailButton.type = 'button';
+        addEmailButton.className = 'button--compact';
+        addEmailButton.textContent = '+ Add email';
+        addEmailButton.addEventListener('click', () => buildContactEntryRow(emailsContainer, 'email'));
+        form.appendChild(addEmailButton);
+
+        const addressLabel = document.createElement('label');
+        addressLabel.textContent = 'Address';
+        const addressTextarea = document.createElement('textarea');
+        addressTextarea.value = contact.address || '';
+        addressTextarea.maxLength = 500;
+        addressLabel.appendChild(addressTextarea);
+        form.appendChild(addressLabel);
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = contact.notes || '';
+        notesTextarea.maxLength = 2000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadContacts(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/contacts/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    contact_id: contact.id,
+                    name: nameInput.value,
+                    category: categoryInput.value,
+                    phones: collectContactEntries(phonesContainer, 'phone'),
+                    emails: collectContactEntries(emailsContainer, 'email'),
+                    address: addressTextarea.value,
+                    notes: notesTextarea.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadContacts(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save contact.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
     async function loadPets(householdId) {
         const { response, body } = await apiRequest('/households/pets?household_id=' + householdId);
         const list = document.getElementById('household-pets-list');
@@ -463,7 +735,10 @@
         }
 
         for (const pet of body.pets) {
-            const details = [pet.species, pet.breed, pet.birthday].filter(Boolean).join(', ');
+            const vetContact = currentContacts.find((contact) => contact.id === pet.vet_contact_id);
+            const details = [pet.species, pet.breed, pet.birthday, vetContact ? `Vet: ${vetContact.name}` : null]
+                .filter(Boolean)
+                .join(', ');
             const label = details ? `${pet.name} (${details})` : pet.name;
             const { li, actions } = buildListItem(label);
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderPetEditForm(li, pet, householdId)));
@@ -520,6 +795,13 @@
         notesLabel.appendChild(notesTextarea);
         form.appendChild(notesLabel);
 
+        const vetLabel = document.createElement('label');
+        vetLabel.textContent = 'Vet';
+        const vetSelect = document.createElement('select');
+        populateVetSelect(vetSelect, pet.vet_contact_id);
+        vetLabel.appendChild(vetSelect);
+        form.appendChild(vetLabel);
+
         const row = document.createElement('div');
         row.className = 'form-row';
         const saveButton = document.createElement('button');
@@ -551,6 +833,7 @@
                     breed: breedInput.value,
                     birthday: birthdayInput.value,
                     notes: notesTextarea.value,
+                    vet_contact_id: vetSelect.value ? Number(vetSelect.value) : null,
                 }),
             });
 
@@ -2228,6 +2511,43 @@
         messageEl.hidden = false;
     });
 
+    const householdContactPhones = document.getElementById('household-contact-phones');
+    const householdContactEmails = document.getElementById('household-contact-emails');
+    document.getElementById('household-contact-add-phone').addEventListener('click', () => buildContactEntryRow(householdContactPhones, 'phone'));
+    document.getElementById('household-contact-add-email').addEventListener('click', () => buildContactEntryRow(householdContactEmails, 'email'));
+
+    document.getElementById('household-contact-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-contact-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/contacts', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                name: form.name.value,
+                category: form.category.value,
+                phones: collectContactEntries(householdContactPhones, 'phone'),
+                emails: collectContactEntries(householdContactEmails, 'email'),
+                address: form.address.value,
+                notes: form.notes.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            householdContactPhones.innerHTML = '';
+            householdContactEmails.innerHTML = '';
+            await loadContacts(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add contact.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
     document.getElementById('household-pet-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -2243,11 +2563,13 @@
                 breed: form.breed.value,
                 birthday: form.birthday.value,
                 notes: form.notes.value,
+                vet_contact_id: form.vet_contact_id.value ? Number(form.vet_contact_id.value) : null,
             }),
         });
 
         if (response.ok) {
             form.reset();
+            populateVetSelect(document.getElementById('household-pet-vet-contact'));
             await loadPets(currentHouseholdId);
             return;
         }

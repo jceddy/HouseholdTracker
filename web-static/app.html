@@ -88,6 +88,35 @@
                 <p id="household-settings-message" class="message" hidden></p>
             </form>
 
+            <h4>Contacts</h4>
+            <ul id="household-contacts-list"></ul>
+            <form id="household-contact-form">
+                <label>Name
+                    <input type="text" id="household-contact-name" name="name" required maxlength="150">
+                </label>
+                <label>Category
+                    <input type="text" id="household-contact-category" name="category" maxlength="50" placeholder="e.g. Veterinarian, Plumber">
+                </label>
+                <div>
+                    <span>Phone numbers</span>
+                    <div id="household-contact-phones" class="contact-entries"></div>
+                    <button type="button" id="household-contact-add-phone" class="button--compact">+ Add phone</button>
+                </div>
+                <div>
+                    <span>Email addresses</span>
+                    <div id="household-contact-emails" class="contact-entries"></div>
+                    <button type="button" id="household-contact-add-email" class="button--compact">+ Add email</button>
+                </div>
+                <label>Address
+                    <textarea id="household-contact-address" name="address" maxlength="500"></textarea>
+                </label>
+                <label>Notes
+                    <textarea id="household-contact-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <button type="submit">Add contact</button>
+                <p id="household-contact-message" class="message" hidden></p>
+            </form>
+
             <div id="household-delete-section" hidden>
                 <h4>Delete household</h4>
                 <p>This permanently deletes this household and everything in it -- members, notes, pets, tasks, the shopping list, staples, home improvement projects -- for every member, not just you. This cannot be undone.</p>
@@ -136,6 +165,9 @@
                 </label>
                 <label>Notes
                     <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <label>Vet
+                    <select id="household-pet-vet-contact" name="vet_contact_id"></select>
                 </label>
                 <button type="submit">Add pet</button>
                 <p id="household-pet-message" class="message" hidden></p>

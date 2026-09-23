@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace HouseholdTracker\Household;
 
 use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
+use HouseholdTracker\Repository\HouseholdContactRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -16,9 +17,10 @@ use HouseholdTracker\Repository\UserRepository;
 
 /**
  * Household creation, membership, the invite flow (issues #5, #33), and
- * household-scoped settings/notes/pets/shopping list/staples/calendar
- * (issues #7, #24, #66, #13). A user may belong to any number of households
- * (household_members has no uniqueness constraint on user_id alone).
+ * household-scoped settings/notes/pets/shopping list/staples/calendar/
+ * contacts (issues #7, #24, #66, #13, #16). A user may belong to any
+ * number of households (household_members has no uniqueness constraint on
+ * user_id alone).
  * Invites target either an existing registered user (looked up by username
  * then email, mirroring AuthService::register()'s own validation order) or,
  * if neither matches and the input is a valid email address, an
@@ -45,6 +47,7 @@ final class HouseholdService
         private readonly HouseholdShoppingItemRepository $shoppingItems,
         private readonly HouseholdStapleItemRepository $staples,
         private readonly HouseholdCalendarEventRepository $calendarEvents,
+        private readonly HouseholdContactRepository $contacts,
     ) {
     }
 
@@ -306,9 +309,11 @@ final class HouseholdService
      * createPet(...)/updatePet(...)/deletePet(...) - pets have no privacy
      * tiers, unlike notes: every household member sees the full list, and
      * any member may add, edit, or remove a pet (a shared household
-     * resource, not a per-user one). vet_contact_id is deliberately absent
-     * for now -- issue #16 (household contacts) hasn't shipped yet; see the
-     * migration's own comment.
+     * resource, not a per-user one). vet_contact_id (issue #16) must, if
+     * given, reference a contact already in the same household --
+     * validateVetContactId() below, the same "must belong to this
+     * household" check calendar events already use for
+     * responsible_user_id.
      */
     public function createPet(
         int $callerId,
@@ -317,12 +322,14 @@ final class HouseholdService
         ?string $species,
         ?string $breed,
         ?string $birthday,
-        ?string $notes
+        ?string $notes,
+        ?int $vetContactId
     ): array {
         $this->requireMember($householdId, $callerId);
         [$name, $species, $breed, $birthday, $notes] = $this->validatePetInput($name, $species, $breed, $birthday, $notes);
+        $this->validateVetContactId($householdId, $vetContactId);
 
-        return $this->pets->create($householdId, $callerId, $name, $species, $breed, $birthday, $notes);
+        return $this->pets->create($householdId, $callerId, $name, $species, $breed, $birthday, $notes, $vetContactId);
     }
 
     public function updatePet(
@@ -332,11 +339,13 @@ final class HouseholdService
         ?string $species,
         ?string $breed,
         ?string $birthday,
-        ?string $notes
+        ?string $notes,
+        ?int $vetContactId
     ): array {
         $pet = $this->requireMemberForPet($callerId, $petId);
         [$name, $species, $breed, $birthday, $notes] = $this->validatePetInput($name, $species, $breed, $birthday, $notes);
-        $this->pets->update((int) $pet['id'], $name, $species, $breed, $birthday, $notes);
+        $this->validateVetContactId((int) $pet['household_id'], $vetContactId);
+        $this->pets->update((int) $pet['id'], $name, $species, $breed, $birthday, $notes, $vetContactId);
 
         return $this->pets->findById((int) $pet['id']);
     }
@@ -345,6 +354,72 @@ final class HouseholdService
     {
         $pet = $this->requireMemberForPet($callerId, $petId);
         $this->pets->delete((int) $pet['id']);
+    }
+
+    public function listContacts(int $callerId, int $householdId): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        return $this->contacts->listForHousehold($householdId);
+    }
+
+    /**
+     * createContact(...)/updateContact(...)/deleteContact(...) - a general-
+     * purpose address book (issue #16), split off from pets' own vet_name/
+     * vet_phone/vet_address fields so other trackers (pets' own
+     * vet_contact_id first, possibly home improvement's contractors or
+     * finances' bank/insurance contacts later) can point into one shared
+     * table instead of duplicating contact fields. Same "no privacy tiers,
+     * any member may add/edit/remove" permission model as pets -- shared
+     * reference data, not privacy-bearing content.
+     *
+     * $phones/$emails (issue #16 follow-up) are arrays of
+     * `['label' => 'home'|'mobile'|'work', 'phone' => string]`/
+     * `['label' => ..., 'email' => string]` -- a contact may have any
+     * number of each, replaced wholesale on every save (see
+     * HouseholdContactRepository::replacePhones()/replaceEmails()), the
+     * same "edited as a whole, not diffed" approach a task's assignee list
+     * already uses.
+     */
+    public function createContact(
+        int $callerId,
+        int $householdId,
+        string $name,
+        ?string $category,
+        array $phones,
+        array $emails,
+        ?string $address,
+        ?string $notes
+    ): array {
+        $this->requireMember($householdId, $callerId);
+        [$name, $category, $phones, $emails, $address, $notes] =
+            $this->validateContactInput($name, $category, $phones, $emails, $address, $notes);
+
+        return $this->contacts->create($householdId, $callerId, $name, $category, $phones, $emails, $address, $notes);
+    }
+
+    public function updateContact(
+        int $callerId,
+        int $contactId,
+        string $name,
+        ?string $category,
+        array $phones,
+        array $emails,
+        ?string $address,
+        ?string $notes
+    ): array {
+        $contact = $this->requireMemberForContact($callerId, $contactId);
+        [$name, $category, $phones, $emails, $address, $notes] =
+            $this->validateContactInput($name, $category, $phones, $emails, $address, $notes);
+        $this->contacts->update((int) $contact['id'], $name, $category, $phones, $emails, $address, $notes);
+
+        return $this->contacts->findById((int) $contact['id']);
+    }
+
+    public function deleteContact(int $callerId, int $contactId): void
+    {
+        $contact = $this->requireMemberForContact($callerId, $contactId);
+        $this->contacts->delete((int) $contact['id']);
     }
 
     /**
@@ -588,6 +663,118 @@ final class HouseholdService
         }
 
         return [$name, $species, $breed, $birthday, $notes];
+    }
+
+    private function validateVetContactId(int $householdId, ?int $vetContactId): void
+    {
+        if ($vetContactId === null) {
+            return;
+        }
+
+        $contact = $this->contacts->findById($vetContactId);
+        if ($contact === null || (int) $contact['household_id'] !== $householdId) {
+            throw new \InvalidArgumentException('The vet contact must be a contact in this household.');
+        }
+    }
+
+    private function requireMemberForContact(int $callerId, int $contactId): array
+    {
+        $contact = $this->contacts->findById($contactId);
+        if ($contact === null) {
+            throw new ContactNotFoundException('Contact not found.');
+        }
+
+        $this->requireMember((int) $contact['household_id'], $callerId);
+
+        return $contact;
+    }
+
+    private const CONTACT_LABELS = ['home', 'mobile', 'work'];
+
+    private function validateContactInput(
+        string $name,
+        ?string $category,
+        array $phones,
+        array $emails,
+        ?string $address,
+        ?string $notes
+    ): array {
+        $name = trim($name);
+        if ($name === '' || strlen($name) > 150) {
+            throw new \InvalidArgumentException('Contact name must be 1-150 characters.');
+        }
+
+        $category = $category !== null ? trim($category) : null;
+        $category = $category === '' ? null : $category;
+        if ($category !== null && strlen($category) > 50) {
+            throw new \InvalidArgumentException('Category must be 50 characters or fewer.');
+        }
+
+        $phones = $this->validateContactPhones($phones);
+        $emails = $this->validateContactEmails($emails);
+
+        $address = $address !== null ? trim($address) : null;
+        $address = $address === '' ? null : $address;
+        if ($address !== null && strlen($address) > 500) {
+            throw new \InvalidArgumentException('Address must be 500 characters or fewer.');
+        }
+
+        $notes = $notes !== null ? trim($notes) : null;
+        $notes = $notes === '' ? null : $notes;
+        if ($notes !== null && strlen($notes) > 2000) {
+            throw new \InvalidArgumentException('Contact notes must be 2000 characters or fewer.');
+        }
+
+        return [$name, $category, $phones, $emails, $address, $notes];
+    }
+
+    /**
+     * validateContactPhones(...)/validateContactEmails(...) - each entry's
+     * label must be one of the closed CONTACT_LABELS set (unlike a
+     * contact's own freeform category); a contact may have any number of
+     * phones/emails, including zero.
+     */
+    private function validateContactPhones(array $phones): array
+    {
+        $validated = [];
+        foreach ($phones as $phone) {
+            $label = (string) ($phone['label'] ?? '');
+            if (!in_array($label, self::CONTACT_LABELS, true)) {
+                throw new \InvalidArgumentException('Phone label must be "home", "mobile", or "work".');
+            }
+
+            $value = trim((string) ($phone['phone'] ?? ''));
+            if ($value === '' || strlen($value) > 50) {
+                throw new \InvalidArgumentException('Each phone number must be 1-50 characters.');
+            }
+
+            $validated[] = ['label' => $label, 'phone' => $value];
+        }
+
+        return $validated;
+    }
+
+    private function validateContactEmails(array $emails): array
+    {
+        $validated = [];
+        foreach ($emails as $email) {
+            $label = (string) ($email['label'] ?? '');
+            if (!in_array($label, self::CONTACT_LABELS, true)) {
+                throw new \InvalidArgumentException('Email label must be "home", "mobile", or "work".');
+            }
+
+            $value = trim((string) ($email['email'] ?? ''));
+            if ($value === '' || strlen($value) > 255) {
+                throw new \InvalidArgumentException('Each email must be 1-255 characters.');
+            }
+            if (filter_var($value, FILTER_VALIDATE_EMAIL) === false) {
+                throw new \InvalidArgumentException('Each email must be a valid email address.');
+            }
+
+            $validated[] = ['label' => $label, 'email' => $value];
+        }
+
+        return $validated;
     }
 
     /**

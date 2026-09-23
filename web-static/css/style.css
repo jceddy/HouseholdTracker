@@ -157,7 +157,7 @@ main li button {
     font-size: 0.8rem;
 }
 
-main li button.icon-button {
+main button.icon-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -166,9 +166,10 @@ main li button.icon-button {
     padding: 0;
     background: transparent;
     color: var(--color-muted);
+    flex-shrink: 0;
 }
 
-main li button.icon-button:hover {
+main button.icon-button:hover {
     color: var(--color-accent);
     background: var(--color-bg);
 }
@@ -256,6 +257,27 @@ label {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+}
+
+/* contact-entry-row (a phone/email row in the household contacts form) --
+   select is content-sized (its "Home"/"Mobile"/"Work" text is short), but
+   the value input needs min-width: 0 to actually shrink inside the flex
+   row instead of overflowing past the icon-button on a narrow screen; the
+   media query below narrows it further still, leaving a little more room
+   for the button on the smallest screens. */
+.contact-entry-row select {
+    flex: 0 0 auto;
+}
+
+.contact-entry-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+@media (max-width: 480px) {
+    .contact-entry-row input {
+        max-width: 90%;
+    }
 }
 
 .checkbox-label {
