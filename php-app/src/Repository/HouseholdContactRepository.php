@@ -6,31 +6,31 @@ namespace HouseholdTracker\Repository;
 
 use HouseholdTracker\Database\Connection;
 
-final class HouseholdPetRepository
+final class HouseholdContactRepository
 {
     public function create(
         int $householdId,
         int $createdByUserId,
         string $name,
-        ?string $species,
-        ?string $breed,
-        ?string $birthday,
-        ?string $notes,
-        ?int $vetContactId
+        ?string $category,
+        ?string $phone,
+        ?string $email,
+        ?string $address,
+        ?string $notes
     ): array {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
-            'INSERT INTO household_pets (household_id, name, species, breed, birthday, notes, vet_contact_id, created_by_user_id)
-             VALUES (:household_id, :name, :species, :breed, :birthday, :notes, :vet_contact_id, :created_by_user_id)'
+            'INSERT INTO household_contacts (household_id, name, category, phone, email, address, notes, created_by_user_id)
+             VALUES (:household_id, :name, :category, :phone, :email, :address, :notes, :created_by_user_id)'
         );
         $stmt->execute([
             'household_id' => $householdId,
             'name' => $name,
-            'species' => $species,
-            'breed' => $breed,
-            'birthday' => $birthday,
+            'category' => $category,
+            'phone' => $phone,
+            'email' => $email,
+            'address' => $address,
             'notes' => $notes,
-            'vet_contact_id' => $vetContactId,
             'created_by_user_id' => $createdByUserId,
         ]);
 
@@ -39,7 +39,7 @@ final class HouseholdPetRepository
 
     public function findById(int $id): ?array
     {
-        $stmt = Connection::get()->prepare('SELECT * FROM household_pets WHERE id = :id');
+        $stmt = Connection::get()->prepare('SELECT * FROM household_contacts WHERE id = :id');
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
 
@@ -49,7 +49,7 @@ final class HouseholdPetRepository
     public function listForHousehold(int $householdId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT * FROM household_pets WHERE household_id = :household_id ORDER BY name ASC'
+            'SELECT * FROM household_contacts WHERE household_id = :household_id ORDER BY name ASC'
         );
         $stmt->execute(['household_id' => $householdId]);
 
@@ -59,31 +59,31 @@ final class HouseholdPetRepository
     public function update(
         int $id,
         string $name,
-        ?string $species,
-        ?string $breed,
-        ?string $birthday,
-        ?string $notes,
-        ?int $vetContactId
+        ?string $category,
+        ?string $phone,
+        ?string $email,
+        ?string $address,
+        ?string $notes
     ): void {
         $stmt = Connection::get()->prepare(
-            'UPDATE household_pets
-             SET name = :name, species = :species, breed = :breed, birthday = :birthday, notes = :notes, vet_contact_id = :vet_contact_id
+            'UPDATE household_contacts
+             SET name = :name, category = :category, phone = :phone, email = :email, address = :address, notes = :notes
              WHERE id = :id'
         );
         $stmt->execute([
             'name' => $name,
-            'species' => $species,
-            'breed' => $breed,
-            'birthday' => $birthday,
+            'category' => $category,
+            'phone' => $phone,
+            'email' => $email,
+            'address' => $address,
             'notes' => $notes,
-            'vet_contact_id' => $vetContactId,
             'id' => $id,
         ]);
     }
 
     public function delete(int $id): void
     {
-        $stmt = Connection::get()->prepare('DELETE FROM household_pets WHERE id = :id');
+        $stmt = Connection::get()->prepare('DELETE FROM household_contacts WHERE id = :id');
         $stmt->execute(['id' => $id]);
     }
 }

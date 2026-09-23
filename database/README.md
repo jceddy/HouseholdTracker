@@ -211,6 +211,20 @@ above remains the only way migrations reach the deployed database.
   their own event, same permission model as notes. See "Household
   calendar" in `php-app/README.md`.
 
+- **Household contacts** (`0030`, issue #16): `household_contacts` -- a
+  general-purpose address book (vet, doctor, plumber, ...), split off from
+  `household_pets` rather than a `vet_*` field bolted onto it. Same
+  no-privacy-tiers permission model as `household_pets`.
+  `category`/`phone`/`address` are free text, like `household_shopping_
+  items.category`; `email` is validated as a real address at the
+  application layer, not by the schema.
+- **Pets link to a vet contact** (`0031`, issue #16 follow-up): adds
+  `household_pets.vet_contact_id`, nullable, `ON DELETE SET NULL` (like
+  `household_tasks.assigned_to_user_id`) -- left out of `0007` because
+  `household_contacts` didn't exist yet for it to reference (see that
+  migration's own comment). See "Household contacts" in
+  `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.

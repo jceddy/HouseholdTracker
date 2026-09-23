@@ -23,6 +23,7 @@ use HouseholdTracker\Database\MigrationRunner;
 use HouseholdTracker\Household\AlreadyMemberException;
 use HouseholdTracker\Household\CalendarEventNotFoundException;
 use HouseholdTracker\Household\CannotInviteSelfException;
+use HouseholdTracker\Household\ContactNotFoundException;
 use HouseholdTracker\Household\HomeImprovementService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
@@ -44,6 +45,7 @@ use HouseholdTracker\Maintenance\MaintenanceGate;
 use HouseholdTracker\Repository\EmailVerificationRepository;
 use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
+use HouseholdTracker\Repository\HouseholdContactRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -288,7 +290,8 @@ $households = new HouseholdService(
     new HouseholdPetRepository(),
     new HouseholdShoppingItemRepository(),
     new HouseholdStapleItemRepository(),
-    new HouseholdCalendarEventRepository()
+    new HouseholdCalendarEventRepository(),
+    new HouseholdContactRepository()
 );
 
 $taskInstances = new HouseholdTaskInstanceRepository();
@@ -951,6 +954,79 @@ if ($path === '/households/calendar/delete' && $method === 'POST') {
     }
 }
 
+if ($path === '/households/contacts' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'contacts' => $households->listContacts((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/contacts' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $contact = $households->createContact(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['category']) ? (string) $body['category'] : null,
+            isset($body['phone']) ? (string) $body['phone'] : null,
+            isset($body['email']) ? (string) $body['email'] : null,
+            isset($body['address']) ? (string) $body['address'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(201, ['status' => 'ok', 'contact' => $contact]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/contacts/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $contact = $households->updateContact(
+            (int) $currentUser['id'],
+            (int) ($body['contact_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['category']) ? (string) $body['category'] : null,
+            isset($body['phone']) ? (string) $body['phone'] : null,
+            isset($body['email']) ? (string) $body['email'] : null,
+            isset($body['address']) ? (string) $body['address'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'contact' => $contact]);
+    } catch (ContactNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/contacts/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $households->deleteContact((int) $currentUser['id'], (int) ($body['contact_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (ContactNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/households/pets' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $householdId = (int) ($_GET['household_id'] ?? 0);
@@ -974,7 +1050,8 @@ if ($path === '/households/pets' && $method === 'POST') {
             isset($body['species']) ? (string) $body['species'] : null,
             isset($body['breed']) ? (string) $body['breed'] : null,
             isset($body['birthday']) ? (string) $body['birthday'] : null,
-            isset($body['notes']) ? (string) $body['notes'] : null
+            isset($body['notes']) ? (string) $body['notes'] : null,
+            isset($body['vet_contact_id']) && $body['vet_contact_id'] !== null ? (int) $body['vet_contact_id'] : null
         );
         respond(201, ['status' => 'ok', 'pet' => $pet]);
     } catch (NotAHouseholdMemberException $e) {
@@ -996,7 +1073,8 @@ if ($path === '/households/pets/update' && $method === 'POST') {
             isset($body['species']) ? (string) $body['species'] : null,
             isset($body['breed']) ? (string) $body['breed'] : null,
             isset($body['birthday']) ? (string) $body['birthday'] : null,
-            isset($body['notes']) ? (string) $body['notes'] : null
+            isset($body['notes']) ? (string) $body['notes'] : null,
+            isset($body['vet_contact_id']) && $body['vet_contact_id'] !== null ? (int) $body['vet_contact_id'] : null
         );
         respond(200, ['status' => 'ok', 'pet' => $pet]);
     } catch (PetNotFoundException $e) {

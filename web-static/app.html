@@ -100,6 +100,31 @@
                     <p id="household-delete-message" class="message" hidden></p>
                 </form>
             </div>
+
+            <h4>Contacts</h4>
+            <ul id="household-contacts-list"></ul>
+            <form id="household-contact-form">
+                <label>Name
+                    <input type="text" id="household-contact-name" name="name" required maxlength="150">
+                </label>
+                <label>Category
+                    <input type="text" id="household-contact-category" name="category" maxlength="50" placeholder="e.g. Veterinarian, Plumber">
+                </label>
+                <label>Phone
+                    <input type="text" id="household-contact-phone" name="phone" maxlength="50">
+                </label>
+                <label>Email
+                    <input type="email" id="household-contact-email" name="email" maxlength="255">
+                </label>
+                <label>Address
+                    <input type="text" id="household-contact-address" name="address" maxlength="255">
+                </label>
+                <label>Notes
+                    <textarea id="household-contact-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <button type="submit">Add contact</button>
+                <p id="household-contact-message" class="message" hidden></p>
+            </form>
         </div>
 
         <div class="tab-panel" id="tab-panel-notes" role="tabpanel" hidden>
@@ -136,6 +161,9 @@
                 </label>
                 <label>Notes
                     <textarea id="household-pet-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <label>Vet
+                    <select id="household-pet-vet-contact" name="vet_contact_id"></select>
                 </label>
                 <button type="submit">Add pet</button>
                 <p id="household-pet-message" class="message" hidden></p>
