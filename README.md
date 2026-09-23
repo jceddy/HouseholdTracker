@@ -71,6 +71,13 @@ whole check), a change with nothing to migrate still needs a migration
 file to carry the bump — see "Adding a new migration" in
 `database/README.md` for this "version-only" migration shape.
 
+**MINOR vs PATCH**: bump `MINOR` (`0.X.0`) for a new feature, schema
+change, or anything else a user would notice as new capability. Bump
+`PATCH` (`0.29.X`) for a small fix or cosmetic tweak with no new
+capability — reordering a form, a copy/label change, a bug fix restoring
+intended behavior. Everything through PR #76 bumped `MINOR` regardless of
+size; this split starts with PR #77 onward.
+
 ## Deployment
 
 `.github/workflows/deploy.yml` deploys to Bluehost over FTP on every push
