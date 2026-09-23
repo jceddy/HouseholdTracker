@@ -37,10 +37,11 @@ database.
   - `Household/` — `HouseholdService` (creation, membership, invites —
     issue #5; settings, notes, and pets — issue #7; the shopping list —
     issue #24; staples — issue #66; roles and permissions — issue #17;
-    the calendar — issue #13)
+    the calendar — issue #13; contacts — issue #16)
     plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
-    and maintenance — issue #11).
+    and maintenance — issue #11); `HouseholdMeetingService` (meetings —
+    issue #8).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -128,7 +129,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/calendar/delete` | `{"event_id"}`                                | Requires auth. Same `404`/`403` rules as update. |
 | GET    | `/households/tasks`       | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. One row per task in the household (per assignee, for an `"everyone"`-mode task's concurrent copies) — the single soonest-due *pending* instance, not every instance cron may have generated (see "Task/chore tracking" below). Returns `{"tasks": [{"id","task_id","household_id","title","description","assignment_mode","priority","assigned_to_user_id","assigned_to_username","assignees","recurrence_frequency","recurrence_interval","due_at","status","completed_at","completed_by_user_id","notes","created_at","completion_count","last_completed_at"}]}` — `id` is the *instance's* id (what every other `/households/tasks/*` route below takes as `instance_id`), `task_id` its parent definition's; `assigned_to_user_id`/`assigned_to_username` are *this instance's own* assignee (only ever set for one of an `'everyone'`-mode task's per-assignee copies, see "Task/chore tracking" below), `assignees` is the full `[{"id","username"}, ...]` list for the parent task regardless of mode; `due_at` is `null` for an open-ended task (see "Open-ended tasks" below), ordered ahead of every dated instance, highest `priority` first. |
 | GET    | `/households/tasks/finished` | query param `household_id`                      | Requires auth; `403` if the caller isn't a member. Every instance resolved *today* in the household, completed or skipped alike, newest first — the household Tasks tab's "Show finished today" list, the counterpart to `GET /households/tasks` above (which drops a resolved instance the moment it's no longer pending). Same joined row shape, plus `completed_by_username` (who resolved it — set for both `"done"` and `"skipped"`). |
-| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "notes"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?, "priority"?: "low"\|"medium"\|"high"\|"critical", "source_type"?: "home_improvement_project"\|"maintenance", "source_id"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `notes` (≤2000 chars, like `description`) seeds the created instance's own notes — general notes on this occurrence, not tied to completing/skipping it (see "Notes on a task" below); every id in `assigned_to_user_ids` must be a member of the household; `assignment_mode` defaults to `"anyone"` and must be `"everyone"` only with at least one assignee (`400` otherwise); `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at`, if given, must be `YYYY-MM-DD` (`400` otherwise); omitted for a *recurring* task it defaults to today (still needs a real anchor date), omitted for a *one-off* task it's left `null` — an open-ended task with no deadline (see "Open-ended tasks" below). `priority` only really matters for an open-ended task (defaults to `"medium"` there if not given) — stored as given otherwise, `400` if not one of the four values. `source_type`/`source_id` (issue #11's own follow-up) tag this task as a home improvement project's own task (`source_type = "home_improvement_project"`, `source_id` a real project in this same household — `404` otherwise) or a maintenance item (`source_type = "maintenance"`, `source_id` omitted, and `recurrence_frequency` required — `400` otherwise); omit both for an ordinary task, unchanged from before this follow-up. See "Home improvement projects and maintenance" below. `400` on any other validation failure. Creates the definition *and* its first instance(s) in one call — one shared instance for `"anyone"` mode, one per assignee for `"everyone"` mode (all sharing the same initial `notes`, if given). Returns `{"tasks": [...]}` (an *array*, since `"everyone"` mode can create more than one instance — each in the same joined shape as the list above). |
+| POST   | `/households/tasks`       | `{"household_id", "title", "description"?, "notes"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?, "priority"?: "low"\|"medium"\|"high"\|"critical", "source_type"?: "home_improvement_project"\|"maintenance"\|"meeting", "source_id"?}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `notes` (≤2000 chars, like `description`) seeds the created instance's own notes — general notes on this occurrence, not tied to completing/skipping it (see "Notes on a task" below); every id in `assigned_to_user_ids` must be a member of the household; `assignment_mode` defaults to `"anyone"` and must be `"everyone"` only with at least one assignee (`400` otherwise); `recurrence_frequency` (`daily`\|`weekly`\|`monthly`\|`annual`) pairs with `recurrence_interval` (default `1`) — omit both for a one-off task. `due_at`, if given, must be `YYYY-MM-DD` (`400` otherwise); omitted for a *recurring* task it defaults to today (still needs a real anchor date), omitted for a *one-off* task it's left `null` — an open-ended task with no deadline (see "Open-ended tasks" below). `priority` only really matters for an open-ended task (defaults to `"medium"` there if not given) — stored as given otherwise, `400` if not one of the four values. `source_type`/`source_id` tag this task as a home improvement project's own task (`source_type = "home_improvement_project"`, `source_id` a real project in this same household — `404` otherwise), a maintenance item (`source_type = "maintenance"`, `source_id` omitted, and `recurrence_frequency` required — `400` otherwise, issue #11's own follow-up), or a meeting's own action item (`source_type = "meeting"`, `source_id` a real meeting in this same household — `404` otherwise, issue #8); omit both for an ordinary task. See "Home improvement projects and maintenance" and "Household meetings" below. `400` on any other validation failure. Creates the definition *and* its first instance(s) in one call — one shared instance for `"anyone"` mode, one per assignee for `"everyone"` mode (all sharing the same initial `notes`, if given). Returns `{"tasks": [...]}` (an *array*, since `"everyone"` mode can create more than one instance — each in the same joined shape as the list above). |
 | POST   | `/households/tasks/update` | `{"instance_id", "title", "description"?, "notes"?, "assigned_to_user_ids"?: [int], "assignment_mode"?: "anyone"\|"everyone", "recurrence_frequency"?, "recurrence_interval"?, "due_at"?, "priority"?: "low"\|"medium"\|"high"\|"critical"}` | Requires auth. `404` if no such instance; `403` if the caller isn't a member of its household. Updates the parent definition's title/description/assignees/mode/priority/recurrence *and* moves this specific instance's own due date (or clears it, per the same `due_at` rules as create above) — see "Task/chore tracking" below for why editing doesn't touch the definition's `start_date`, any other instance, or retroactively create/delete instances for an assignee added/removed by this call. `notes` sets this instance's own notes directly — unlike `/complete`'s `notes` below, omitting or blanking it here *clears* it (an explicit edit, not a "didn't say anything this time" default). Any member may update any task. Returns `{"task"}` (single row, unlike the create route above). |
 | POST   | `/households/tasks/delete` | `{"instance_id"}`                                | Requires auth. Same `404`/`403` rules as update. For a recurring task, removes just this instance outright, with no record left behind — use `/households/tasks/skip` below instead if it's worth keeping a reason on file. For a one-off task, deletes the instance and then, only once that leaves the definition with zero remaining instances, the definition too — covers both a single-assignee one-off (its one instance) and an `"everyone"`-mode one-off (each assignee's own copy needs deleting first) without leaving an orphaned definition behind. |
 | POST   | `/households/tasks/complete` | `{"instance_id", "notes"?}`                    | Requires auth. Same `404`/`403` rules as update. Marks this instance `done` (`notes`: ≤2000 chars) — nothing else happens here; a recurring task's *next* occurrence is a separate row already generated (or waiting to be) by the daily cron script, not something completing this one creates on the spot. Unlike `/update`, an omitted `notes` here *preserves* whatever note the instance already had rather than clearing it — completing is usually just a click, and shouldn't silently erase a note written while it was still pending; giving one explicitly still overwrites. In `"everyone"` mode this only completes *this assignee's own copy* — the others' instances are untouched, unlike `"anyone"` mode where any one of them completing the single shared instance finishes it for all. |
@@ -141,6 +142,11 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/projects/update` | `{"project_id", "title", "description"?, "status"?, "estimated_cost"?, "actual_cost"?, "target_date"?}` | Requires auth. `404` if no such project; `403` if the caller isn't a member. Same validation as create, plus `actual_cost` (absent from create — nothing to report before a project exists). Full replace, same as `/households/tasks/update` — an omitted field really does clear it. Returns `{"project"}`. |
 | POST   | `/households/projects/delete` | `{"project_id"}`                                | Requires auth. Same `404`/`403` rules as update. Deletes the project only — its linked tasks are *not* cascade-deleted, they remain as ordinary tasks (see "Home improvement projects and maintenance" below). |
 | GET    | `/households/maintenance` | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every recurring task tagged `source_type = "maintenance"` in the household, same joined shape and soonest-due-pending-only collapsing as `GET /households/tasks` — a second, filtered view onto rows that already appear there too, not a separate list of separate tasks. |
+| GET    | `/households/meetings`    | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every meeting in the household, most recent first. Returns `{"meetings": [{"id","household_id","occurred_at","notes","created_by_user_id","created_at","updated_at","attendees": [{"id","username"}, ...]}]}`. |
+| GET    | `/households/meetings/detail` | query param `meeting_id`                       | Requires auth. `404` if no such meeting; `403` if the caller isn't a member of its household. Returns `{"meeting", "tasks": [...]}` — `tasks` is that meeting's own linked tasks (`source_type = "meeting"`, `source_id` this meeting), same joined shape and soonest-due-pending-only collapsing as `GET /households/tasks`. |
+| POST   | `/households/meetings`    | `{"household_id", "occurred_at", "attendee_user_ids"?: [int], "notes"?}` | Requires auth; `403` if the caller isn't a member. `occurred_at`: any `strtotime()`-parseable date/time (`400` if it fails to parse), normalized to `Y-m-d H:i:s`; every id in `attendee_user_ids` must be a member of the household (`400` otherwise); `notes`: ≤20,000 chars, like a note's own `body`. `400` on any other validation failure. Returns `{"meeting"}`. |
+| POST   | `/households/meetings/update` | `{"meeting_id", "occurred_at", "attendee_user_ids"?, "notes"?}` | Requires auth. `404` if no such meeting; `403` if the caller isn't a member of its household. Any member may update it — see "Household meetings" below. Same validation as create; `attendee_user_ids`, if given, wholesale-replaces the meeting's existing attendee list rather than merging with it. |
+| POST   | `/households/meetings/delete` | `{"meeting_id"}`                               | Requires auth. Same `404`/`403` rules as `/households/meetings/update`. Does not delete the meeting's own linked tasks — see "Household meetings" below. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -794,10 +800,11 @@ tab rather than becoming the post-login landing page (app.html's household
 list) — the issue's own suggestion is to promote it "once enough trackers
 exist to make it worth showing."
 
-**Not yet wired up**: `source_type`/`source_id` are reserved, unenforced
-columns for a future meeting (issue #8) or home-improvement project (issue
-#11) to link its own tasks into this same system, per issue #12's
-consolidation recommendation — nothing sets them yet.
+`source_type`/`source_id` (issue #12's own consolidation recommendation)
+let another tracker link its own tasks into this same system rather than
+growing a bespoke task table of its own — see "Home improvement projects
+and maintenance" and "Household meetings" below for the two trackers that
+use it.
 
 ### Cron setup
 
@@ -876,6 +883,52 @@ entered field (`estimated_cost`/`actual_cost`), not linked to a future
 financial tracker's (issue #9) transactions; no reminders/notifications
 beyond the existing visible overdue indicator; no before/after photos.
 See issue #11's own "Open questions" for the reasoning.
+
+## Household meetings
+
+A running log of household meetings (issue #8, `household_meetings`) —
+when a meeting happened, who was there, and notes on decisions made and
+issues discussed. Same "no privacy tiers, any member can add/edit/remove"
+permission model as pets/contacts — a meeting log is shared household
+information, not one member's private content, unlike notes/calendar
+events.
+
+`occurred_at` accepts any `strtotime()`-parseable date/time (the same
+lenient parsing calendar events use for `starts_at`/`ends_at`), since a
+meeting is often logged after the fact rather than in the moment.
+`notes` is a single freeform field (≤20,000 chars, like a note's own
+`body`) rather than a separate structured "issues discussed" list — one
+of the issue's own open questions, settled the same way every other
+freeform notes column in this schema already is.
+
+**Attendees** (`household_meeting_attendees`) are a plain
+household-member checkbox list, replaced wholesale on every save
+(`HouseholdMeetingRepository::replaceAttendees()`) rather than diffed —
+the same "edited as a whole via the UI, not incrementally" approach a
+task's assignee list (issue #12) already uses.
+
+**A meeting's action items are plain `household_tasks`**, not their own
+table — created via the ordinary `POST /households/tasks` route with
+`source_type = "meeting"` and `source_id` set to that meeting's id,
+reusing issue #12's full assignment/recurrence/completion-history model
+as-is (a meeting's action items can be delegated to a specific member,
+one-off or recurring, just like any other task) — the exact same
+`source_type`/`source_id` pattern issue #11's home improvement projects
+already established, and the same split of responsibility:
+`HouseholdMeetingService` owns the meeting entity itself,
+`GET /households/meetings/detail` returns it alongside its own task list
+(`HouseholdTaskInstanceRepository::listForSource()`), and adding/
+completing/editing/deleting a meeting's task goes through the same
+`/households/tasks/*` routes as any other task — the Meetings tab's "Add
+task" form on a meeting's detail view is just a thin wrapper that
+pre-fills `source_type`/`source_id`.
+
+Deleting a meeting (`POST /households/meetings/delete`) deliberately
+doesn't cascade-delete its tasks — they simply keep existing as ordinary
+tasks, their `source_type`/`source_id` now pointing at nothing in
+particular, the same behavior settled on for a deleted home improvement
+project's own tasks (see above). A member who wants those tasks gone too
+can delete them the normal way.
 
 ## LLM usage (Fireworks AI)
 

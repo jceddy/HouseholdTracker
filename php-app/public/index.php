@@ -25,8 +25,10 @@ use HouseholdTracker\Household\CalendarEventNotFoundException;
 use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\ContactNotFoundException;
 use HouseholdTracker\Household\HomeImprovementService;
+use HouseholdTracker\Household\HouseholdMeetingService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
+use HouseholdTracker\Household\MeetingNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
 use HouseholdTracker\Household\NotAuthorizedToModifyCalendarEventException;
@@ -47,6 +49,7 @@ use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
 use HouseholdTracker\Repository\HouseholdContactRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
+use HouseholdTracker\Repository\HouseholdMeetingRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
@@ -322,17 +325,25 @@ $households = new HouseholdService(
 
 $taskInstances = new HouseholdTaskInstanceRepository();
 $projects = new HomeImprovementProjectRepository();
+$meetings = new HouseholdMeetingRepository();
 
 $tasks = new TaskService(
     new HouseholdMemberRepository(),
     new HouseholdTaskRepository(),
     $taskInstances,
-    $projects
+    $projects,
+    $meetings
 );
 
 $homeImprovement = new HomeImprovementService(
     new HouseholdMemberRepository(),
     $projects,
+    $taskInstances
+);
+
+$meetingService = new HouseholdMeetingService(
+    new HouseholdMemberRepository(),
+    $meetings,
     $taskInstances
 );
 
@@ -1331,7 +1342,7 @@ if ($path === '/households/tasks' && $method === 'POST') {
         respond(201, ['status' => 'ok', 'tasks' => $createdInstances]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
-    } catch (ProjectNotFoundException $e) {
+    } catch (ProjectNotFoundException | MeetingNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1539,7 +1550,86 @@ if ($path === '/households/maintenance' && $method === 'GET') {
     }
 }
 
-// Further household-tracking domain routes (finances, calendar, whatever
-// this app actually ends up tracking) go here.
+if ($path === '/households/meetings' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'meetings' => $meetingService->listMeetings((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meetings/detail' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+
+    try {
+        respond(200, ['status' => 'ok'] + $meetingService->getMeeting((int) $currentUser['id'], (int) ($_GET['meeting_id'] ?? 0)));
+    } catch (MeetingNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meetings' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $meeting = $meetingService->createMeeting(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['occurred_at'] ?? ''),
+            isset($body['attendee_user_ids']) && is_array($body['attendee_user_ids']) ? $body['attendee_user_ids'] : [],
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(201, ['status' => 'ok', 'meeting' => $meeting]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meetings/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $meeting = $meetingService->updateMeeting(
+            (int) $currentUser['id'],
+            (int) ($body['meeting_id'] ?? 0),
+            (string) ($body['occurred_at'] ?? ''),
+            isset($body['attendee_user_ids']) && is_array($body['attendee_user_ids']) ? $body['attendee_user_ids'] : [],
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'meeting' => $meeting]);
+    } catch (MeetingNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meetings/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $meetingService->deleteMeeting((int) $currentUser['id'], (int) ($body['meeting_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (MeetingNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Further household-tracking domain routes (finances, whatever this app
+// actually ends up tracking) go here.
 
 respond(404, ['status' => 'error', 'message' => 'Not found']);

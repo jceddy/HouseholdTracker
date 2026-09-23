@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace HouseholdTracker\Household;
 
 use HouseholdTracker\Repository\HomeImprovementProjectRepository;
+use HouseholdTracker\Repository\HouseholdMeetingRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdTaskInstanceRepository;
 use HouseholdTracker\Repository\HouseholdTaskRepository;
@@ -80,11 +81,13 @@ use HouseholdTracker\Repository\HouseholdTaskRepository;
  * **Home improvement projects and maintenance** (issue #11, using #12's own
  * consolidation recommendation): createTask() can tag a new task with
  * `source_type`/`source_id` -- a home improvement project's own task
- * ('home_improvement_project', pointing at that project) or a maintenance
+ * ('home_improvement_project', pointing at that project), a maintenance
  * item ('maintenance', a marker with no source_id since it doesn't source
- * from anything -- it's just a recurring task by definition). See
- * validateSource() for the full rules. Neither tag changes what a task
- * *is*; a tagged task still shows up in listTasks()/listMyTasks() same as
+ * from anything -- it's just a recurring task by definition), or a
+ * household meeting's own action item ('meeting', pointing at that
+ * meeting -- issue #8). See validateSource() for the full rules. No tag
+ * changes what a task *is*; a tagged task still shows up in
+ * listTasks()/listMyTasks() same as
  * any other -- HouseholdTaskInstanceRepository::listForSource()/
  * listMaintenanceForHousehold() are separate, filtered views onto the same
  * rows for the Home Improvement tab.
@@ -94,7 +97,7 @@ final class TaskService
     private const RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'monthly', 'annual'];
     private const ASSIGNMENT_MODES = ['anyone', 'everyone'];
     private const PRIORITIES = ['low', 'medium', 'high', 'critical'];
-    private const SOURCE_TYPES = ['home_improvement_project', 'maintenance'];
+    private const SOURCE_TYPES = ['home_improvement_project', 'maintenance', 'meeting'];
     private const MAX_RECURRENCE_INTERVAL = 1000;
     private const MAX_NOTES_LENGTH = 2000;
 
@@ -103,6 +106,7 @@ final class TaskService
         private readonly HouseholdTaskRepository $tasks,
         private readonly HouseholdTaskInstanceRepository $instances,
         private readonly HomeImprovementProjectRepository $projects,
+        private readonly HouseholdMeetingRepository $meetings,
     ) {
     }
 
@@ -428,6 +432,10 @@ final class TaskService
      *     comment), and the task must be recurring, since a maintenance
      *     item *is* "a recurring household_task" by definition (issue
      *     #11) -- there's no such thing as a one-off maintenance item.
+     *   - 'meeting': $sourceId required, and must be a real meeting
+     *     belonging to *this same household* -- same reasoning as
+     *     'home_improvement_project'. A meeting's own action items can be
+     *     one-off or recurring, unlike a maintenance item.
      *
      * @return array{0: ?string, 1: ?int}
      */
@@ -456,6 +464,19 @@ final class TaskService
             }
 
             return ['maintenance', null];
+        }
+
+        if ($sourceType === 'meeting') {
+            if ($sourceId === null) {
+                throw new \InvalidArgumentException('source_id is required for a meeting task.');
+            }
+
+            $meeting = $this->meetings->findById($sourceId);
+            if ($meeting === null || (int) $meeting['household_id'] !== $householdId) {
+                throw new MeetingNotFoundException('Meeting not found.');
+            }
+
+            return ['meeting', $sourceId];
         }
 
         // 'home_improvement_project'

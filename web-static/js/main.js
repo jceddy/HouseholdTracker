@@ -300,6 +300,8 @@
         // Same idea for a still-open project detail panel from whichever
         // household was open before this one.
         closeProjectDetail();
+        // Same reset idea, for a still-open meeting detail panel.
+        closeMeetingDetail();
         // Same reset idea, for the calendar's own edit-in-progress state
         // and its "which week" position.
         currentCalendarRangeStart = startOfWeek(new Date());
@@ -314,6 +316,7 @@
         await loadShoppingList(householdId);
         await loadStaples(householdId);
         await loadCalendar(householdId);
+        await loadMeetings(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -340,6 +343,7 @@
         currentMembers = body.members;
         populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
         populateAssigneeCheckboxes(document.getElementById('hi-maintenance-assignees'));
+        populateAssigneeCheckboxes(document.getElementById('household-meeting-attendees'));
 
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
@@ -1144,6 +1148,10 @@
     // tracks which project's detail panel (if any) is currently open, the
     // same module-scope-state pattern as currentHouseholdId itself.
     let currentProjectId = null;
+    // currentMeetingId - same singular-expand-detail-panel idea as
+    // currentProjectId, one level over: at most one meeting's own task
+    // list is ever shown open at a time.
+    let currentMeetingId = null;
 
     const PROJECT_STATUS_LABELS = {
         idea: 'Idea',
@@ -1779,6 +1787,204 @@
         document.getElementById('household-calendar-cancel-button').hidden = false;
     }
 
+    // Household meetings (issue #8). Same "no privacy tiers, any member
+    // can add/edit/remove" permission model as pets/contacts -- a meeting
+    // log is shared household information. A meeting's own action-item
+    // tasks are plain household_tasks tagged source_type = 'meeting',
+    // reusing formatTaskLabel()/Complete/Edit/Delete exactly the same way
+    // the Home Improvement tab's project detail panel already does for a
+    // project's own tasks -- see renderMeetingDetailTasks() below.
+    function formatMeetingLabel(meeting) {
+        const when = fromMysqlDateTime(meeting.occurred_at);
+        const dateOpts = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+        const timeOpts = { hour: 'numeric', minute: '2-digit' };
+        const bits = [`${when.toLocaleDateString(undefined, dateOpts)} ${when.toLocaleTimeString(undefined, timeOpts)}`];
+        const attendeeNames = (meeting.attendees || []).map((attendee) => attendee.username);
+        if (attendeeNames.length > 0) {
+            bits.push(`Attendees: ${attendeeNames.join(', ')}`);
+        }
+        return bits.join(' — ');
+    }
+
+    // renderMeetingEditForm(...) - same inline-edit pattern as
+    // renderProjectEditForm()/renderPetEditForm().
+    function renderMeetingEditForm(li, meeting, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const occurredAtLabel = document.createElement('label');
+        occurredAtLabel.textContent = 'Date/time';
+        const occurredAtInput = document.createElement('input');
+        occurredAtInput.type = 'datetime-local';
+        occurredAtInput.required = true;
+        occurredAtInput.value = formatDateTimeLocal(fromMysqlDateTime(meeting.occurred_at));
+        occurredAtLabel.appendChild(occurredAtInput);
+        form.appendChild(occurredAtLabel);
+
+        const attendeesFieldset = document.createElement('fieldset');
+        attendeesFieldset.className = 'checkbox-fieldset';
+        const attendeesLegend = document.createElement('legend');
+        attendeesLegend.textContent = 'Attendees';
+        attendeesFieldset.appendChild(attendeesLegend);
+        const attendeesContainer = document.createElement('div');
+        attendeesFieldset.appendChild(attendeesContainer);
+        form.appendChild(attendeesFieldset);
+        populateAssigneeCheckboxes(attendeesContainer, (meeting.attendees || []).map((attendee) => attendee.id));
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes (decisions made, issues discussed)';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = meeting.notes || '';
+        notesTextarea.maxLength = 20000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadMeetings(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/meetings/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    meeting_id: meeting.id,
+                    occurred_at: occurredAtInput.value,
+                    attendee_user_ids: getCheckedAssigneeIds(attendeesContainer),
+                    notes: notesTextarea.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadMeetings(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save meeting.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
+    async function loadMeetings(householdId) {
+        const { response, body } = await apiRequest('/households/meetings?household_id=' + householdId);
+        const list = document.getElementById('household-meetings-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const meeting of body.meetings) {
+            const { li, actions } = buildListItem(formatMeetingLabel(meeting));
+            actions.appendChild(buildButton('View tasks', () => openMeetingDetail(meeting.id, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderMeetingEditForm(li, meeting, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/meetings/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ meeting_id: meeting.id }),
+                });
+                if (currentMeetingId === meeting.id) {
+                    closeMeetingDetail();
+                }
+                await loadMeetings(householdId);
+            }));
+            list.appendChild(li);
+        }
+
+        // Keep an open meeting detail panel in sync with the list it came
+        // from, same idea as loadProjects()'s own detail-panel refresh.
+        if (currentMeetingId !== null) {
+            await openMeetingDetail(currentMeetingId, householdId);
+        }
+    }
+
+    async function openMeetingDetail(meetingId, householdId) {
+        const { response, body } = await apiRequest('/households/meetings/detail?meeting_id=' + meetingId);
+        if (!response.ok) {
+            closeMeetingDetail();
+            return;
+        }
+
+        currentMeetingId = meetingId;
+        const detail = document.getElementById('household-meeting-detail');
+        detail.hidden = false;
+        document.getElementById('household-meeting-detail-title').textContent = formatMeetingLabel(body.meeting);
+        document.getElementById('household-meeting-detail-info').textContent = body.meeting.notes || '';
+        renderMeetingDetailTasks(body.tasks, householdId);
+        populateAssigneeCheckboxes(document.getElementById('household-meeting-task-assignees'));
+        detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function closeMeetingDetail() {
+        currentMeetingId = null;
+        document.getElementById('household-meeting-detail').hidden = true;
+    }
+
+    // renderMeetingDetailTasks(...) - a meeting's own linked tasks
+    // (household_tasks tagged source_type = 'meeting', source_id = this
+    // meeting), reusing the exact same formatTaskLabel()/Complete/Edit/
+    // Delete actions the household Tasks tab and the Home Improvement
+    // tab's project detail panel both already use.
+    function renderMeetingDetailTasks(tasks, householdId) {
+        const list = document.getElementById('household-meeting-detail-tasks');
+        list.innerHTML = '';
+
+        if (tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No tasks from this meeting yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, async () => {
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            })));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, async () => {
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            })));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/tasks/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to. Still shows the assignee bit (unlike before the
@@ -2286,6 +2492,65 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save event.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-meeting-detail-close').addEventListener('click', closeMeetingDetail);
+
+    document.getElementById('household-meeting-task-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-meeting-task-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-meeting-task-assignees')),
+                due_at: form.due_at.value,
+                source_type: 'meeting',
+                source_id: currentMeetingId,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMeetings(currentHouseholdId);
+            await loadTasks(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add task.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-meeting-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-meeting-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/meetings', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                occurred_at: form.occurred_at.value,
+                attendee_user_ids: getCheckedAssigneeIds(document.getElementById('household-meeting-attendees')),
+                notes: form.notes.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMeetings(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not log meeting.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });
