@@ -1,6 +1,12 @@
 (async function () {
     let currentHouseholdId = null;
     let currentMembers = [];
+    // currentCalendarRangeStart -- the Monday of the week currently shown
+    // in the Calendar tab; reset to the current week each time a household
+    // is (re)opened, walked forward/backward a week at a time by the
+    // Previous/Next buttons.
+    let currentCalendarRangeStart = null;
+    let editingCalendarEventId = null;
 
     const user = await getCurrentUser();
     if (!user) {
@@ -286,6 +292,10 @@
         // Same idea for a still-open project detail panel from whichever
         // household was open before this one.
         closeProjectDetail();
+        // Same reset idea, for the calendar's own edit-in-progress state
+        // and its "which week" position.
+        currentCalendarRangeStart = startOfWeek(new Date());
+        cancelCalendarEventEdit();
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadPets(householdId);
@@ -294,6 +304,7 @@
         await loadMaintenance(householdId);
         await loadShoppingList(householdId);
         await loadStaples(householdId);
+        await loadCalendar(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -1334,6 +1345,157 @@
         }
     }
 
+    // Household calendar (issue #13). The three-tier visibility redaction
+    // (private/busy/public) happens entirely server-side -- HouseholdService::
+    // listCalendarEvents() already strips a 'busy' event of another
+    // member's down to just {id, household_id, starts_at, ends_at,
+    // visibility}, and never even sends a 'private' one at all. This code
+    // only has to render whatever shape a given event actually arrives in,
+    // never re-derive or double-check the redaction itself.
+
+    // startOfWeek(...) - Monday, at local midnight, of the week containing
+    // `date`. getDay() is 0=Sunday..6=Saturday, so Sunday needs its own
+    // case (6 days back, not -1).
+    function startOfWeek(date) {
+        const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const day = result.getDay();
+        const diff = day === 0 ? -6 : 1 - day;
+        result.setDate(result.getDate() + diff);
+        return result;
+    }
+
+    function formatDateTimeLocal(date) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    // toDateTimeLocalValue(...)/fromMysqlDateTime(...) - the API sends/
+    // expects 'YYYY-MM-DD HH:MM:SS' (see HouseholdCalendarEventRepository),
+    // but an <input type="datetime-local"> needs 'YYYY-MM-DDTHH:MM'. Both
+    // are treated as plain local wall-clock time, never converted through
+    // UTC -- see "Household calendar" in php-app/README.md for why.
+    function fromMysqlDateTime(value) {
+        return new Date(value.replace(' ', 'T'));
+    }
+
+    function formatEventRange(startsAt, endsAt) {
+        const start = fromMysqlDateTime(startsAt);
+        const end = fromMysqlDateTime(endsAt);
+        const dateOpts = { weekday: 'short', month: 'short', day: 'numeric' };
+        const timeOpts = { hour: 'numeric', minute: '2-digit' };
+        return `${start.toLocaleDateString(undefined, dateOpts)} ${start.toLocaleTimeString(undefined, timeOpts)} - ${end.toLocaleTimeString(undefined, timeOpts)}`;
+    }
+
+    function formatCalendarEventLabel(event) {
+        // A redacted 'busy' event of another member's has no title at all
+        // -- see listCalendarEvents()'s own redaction shape.
+        if (event.title === undefined) {
+            return `${formatEventRange(event.starts_at, event.ends_at)} — Busy`;
+        }
+
+        const bits = [`${formatEventRange(event.starts_at, event.ends_at)} — ${event.title}`];
+        if (event.location) {
+            bits.push(event.location);
+        }
+        if (event.responsible_username) {
+            bits.push(`responsible: ${event.responsible_username}`);
+        }
+        if (event.visibility !== 'public') {
+            bits.push(event.visibility.toUpperCase());
+        }
+        return bits.join(' — ');
+    }
+
+    // populateResponsibleSelect(...) - a single "who's responsible for
+    // this" dropdown, unlike populateAssigneeCheckboxes()'s multi-select
+    // checkboxes -- a calendar event has one responsible party, not a list
+    // of assignees (see the issue's own "single responsible party" v1
+    // decision).
+    function populateResponsibleSelect(selectEl, selectedUserId) {
+        selectEl.innerHTML = '';
+        const blankOption = document.createElement('option');
+        blankOption.value = '';
+        blankOption.textContent = '(none)';
+        selectEl.appendChild(blankOption);
+        for (const member of currentMembers) {
+            const option = document.createElement('option');
+            option.value = String(member.user_id);
+            option.textContent = member.username;
+            option.selected = selectedUserId != null && member.user_id === selectedUserId;
+            selectEl.appendChild(option);
+        }
+    }
+
+    function cancelCalendarEventEdit() {
+        editingCalendarEventId = null;
+        const form = document.getElementById('household-calendar-event-form');
+        if (form) {
+            form.reset();
+        }
+        document.getElementById('household-calendar-submit-button').textContent = 'Add event';
+        document.getElementById('household-calendar-cancel-button').hidden = true;
+    }
+
+    async function loadCalendar(householdId) {
+        const from = currentCalendarRangeStart;
+        const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 7);
+        document.getElementById('household-calendar-range-label').textContent =
+            `${from.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} - `
+            + `${new Date(to - 1).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+
+        const { response, body } = await apiRequest(
+            `/households/calendar?household_id=${householdId}&from=${formatDateTimeLocal(from)}&to=${formatDateTimeLocal(to)}`
+        );
+        const list = document.getElementById('household-calendar-list');
+        list.innerHTML = '';
+
+        populateResponsibleSelect(document.getElementById('household-calendar-responsible'));
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.events.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing on the calendar this week.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const event of body.events) {
+            const { li, actions } = buildListItem(formatCalendarEventLabel(event));
+            // A redacted 'busy' event has no created_by_user_id at all, so
+            // it's never mistaken for one of the caller's own -- only an
+            // event the caller actually created (full shape) gets edit/
+            // delete controls, matching HouseholdService::
+            // requireOwnCalendarEvent()'s own creator-only rule.
+            if (event.created_by_user_id === user.id) {
+                actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => startCalendarEventEdit(event)));
+                actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                    await apiRequest('/households/calendar/delete', {
+                        method: 'POST',
+                        body: JSON.stringify({ event_id: event.id }),
+                    });
+                    await loadCalendar(householdId);
+                }));
+            }
+            list.appendChild(li);
+        }
+    }
+
+    function startCalendarEventEdit(event) {
+        editingCalendarEventId = event.id;
+        document.getElementById('household-calendar-title').value = event.title;
+        document.getElementById('household-calendar-description').value = event.description || '';
+        document.getElementById('household-calendar-starts-at').value = formatDateTimeLocal(fromMysqlDateTime(event.starts_at));
+        document.getElementById('household-calendar-ends-at').value = formatDateTimeLocal(fromMysqlDateTime(event.ends_at));
+        document.getElementById('household-calendar-location').value = event.location || '';
+        populateResponsibleSelect(document.getElementById('household-calendar-responsible'), event.responsible_user_id);
+        document.getElementById('household-calendar-visibility').value = event.visibility;
+        document.getElementById('household-calendar-submit-button').textContent = 'Save';
+        document.getElementById('household-calendar-cancel-button').hidden = false;
+    }
+
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to. Still shows the assignee bit (unlike before the
@@ -1787,6 +1949,61 @@
             ? 'No staples were flagged as needing restock.'
             : `Added ${body.items.length} item(s) to the shopping list.`;
         messageEl.className = 'message';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-calendar-prev').addEventListener('click', async () => {
+        currentCalendarRangeStart.setDate(currentCalendarRangeStart.getDate() - 7);
+        await loadCalendar(currentHouseholdId);
+    });
+
+    document.getElementById('household-calendar-next').addEventListener('click', async () => {
+        currentCalendarRangeStart.setDate(currentCalendarRangeStart.getDate() + 7);
+        await loadCalendar(currentHouseholdId);
+    });
+
+    document.getElementById('household-calendar-cancel-button').addEventListener('click', () => {
+        cancelCalendarEventEdit();
+    });
+
+    document.getElementById('household-calendar-event-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-calendar-message');
+        messageEl.hidden = true;
+
+        const responsibleValue = document.getElementById('household-calendar-responsible').value;
+        const payload = {
+            title: form.title.value,
+            description: form.description.value,
+            starts_at: form.starts_at.value,
+            ends_at: form.ends_at.value,
+            location: form.location.value,
+            responsible_user_id: responsibleValue === '' ? null : Number(responsibleValue),
+            visibility: form.visibility.value,
+        };
+
+        const isEdit = editingCalendarEventId !== null;
+        const { response, body } = await apiRequest(
+            isEdit ? '/households/calendar/update' : '/households/calendar',
+            {
+                method: 'POST',
+                body: JSON.stringify(
+                    isEdit
+                        ? { event_id: editingCalendarEventId, ...payload }
+                        : { household_id: currentHouseholdId, ...payload }
+                ),
+            }
+        );
+
+        if (response.ok) {
+            cancelCalendarEventEdit();
+            await loadCalendar(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not save event.';
+        messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });
 

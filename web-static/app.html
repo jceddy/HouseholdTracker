@@ -58,6 +58,7 @@
             <button type="button" class="tab-button" data-tab="home-improvement" role="tab" aria-selected="false">Home Improvement</button>
             <button type="button" class="tab-button" data-tab="shopping-list" role="tab" aria-selected="false">Shopping List</button>
             <button type="button" class="tab-button" data-tab="staples" role="tab" aria-selected="false">Staples</button>
+            <button type="button" class="tab-button" data-tab="calendar" role="tab" aria-selected="false">Calendar</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -322,6 +323,47 @@
                 </label>
                 <button type="submit">Add staple</button>
                 <p id="household-staple-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-calendar" role="tabpanel" hidden>
+            <div class="form-row">
+                <button type="button" id="household-calendar-prev" class="button--compact">&larr; Previous week</button>
+                <span id="household-calendar-range-label"></span>
+                <button type="button" id="household-calendar-next" class="button--compact">Next week &rarr;</button>
+            </div>
+            <ul id="household-calendar-list"></ul>
+            <form id="household-calendar-event-form">
+                <label>Title
+                    <input type="text" id="household-calendar-title" name="title" required maxlength="150">
+                </label>
+                <label>Description
+                    <textarea id="household-calendar-description" name="description" maxlength="2000"></textarea>
+                </label>
+                <label>Starts
+                    <input type="datetime-local" id="household-calendar-starts-at" name="starts_at" required>
+                </label>
+                <label>Ends
+                    <input type="datetime-local" id="household-calendar-ends-at" name="ends_at" required>
+                </label>
+                <label>Location
+                    <input type="text" id="household-calendar-location" name="location" maxlength="255">
+                </label>
+                <label>Responsible party
+                    <select id="household-calendar-responsible"></select>
+                </label>
+                <label>Visibility
+                    <select id="household-calendar-visibility" name="visibility">
+                        <option value="public">Public (everyone sees full details)</option>
+                        <option value="busy">Busy (others just see the time is blocked)</option>
+                        <option value="private">Private (only you see it at all)</option>
+                    </select>
+                </label>
+                <div class="form-row">
+                    <button type="submit" id="household-calendar-submit-button">Add event</button>
+                    <button type="button" id="household-calendar-cancel-button" class="button--compact" hidden>Cancel</button>
+                </div>
+                <p id="household-calendar-message" class="message" hidden></p>
             </form>
         </div>
 

@@ -195,6 +195,22 @@ above remains the only way migrations reach the deployed database.
   cascades into via every other table's own existing `users.id` foreign
   key.
 
-Whatever household-scoped tracker tables come next (finances, calendar,
-whatever the application actually ends up tracking) belong here too, as
-their own numbered migrations.
+- **Household calendar** (`0029`, issue #13): `household_calendar_events`
+  -- single-occurrence events with a three-tier `visibility` enum
+  (`'private'`/`'busy'`/`'public'`), a superset of `household_notes`'
+  plain private/public split: a `'busy'` event of another member's is
+  redacted down to just its blocked time slot rather than excluded
+  outright, unlike a `'private'` one (still excluded at the SQL level,
+  same as a private note). `starts_at`/`ends_at` are plain `DATETIME`, no
+  timezone conversion, same as every other date/time column in this
+  schema. `responsible_user_id` (nullable, `ON DELETE SET NULL`, like
+  `household_tasks.assigned_to_user_id`) is the person accountable for the
+  event; `created_by_user_id` (`CASCADE`, like every other
+  `created_by_user_id` column here) is the actual owner for
+  privacy/edit-permission purposes -- only the creator may edit or delete
+  their own event, same permission model as notes. See "Household
+  calendar" in `php-app/README.md`.
+
+Whatever household-scoped tracker tables come next (finances, whatever the
+application actually ends up tracking) belong here too, as their own
+numbered migrations.

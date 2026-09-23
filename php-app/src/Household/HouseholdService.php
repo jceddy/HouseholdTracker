@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace HouseholdTracker\Household;
 
+use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -15,8 +16,8 @@ use HouseholdTracker\Repository\UserRepository;
 
 /**
  * Household creation, membership, the invite flow (issues #5, #33), and
- * household-scoped settings/notes/pets/shopping list/staples (issues #7,
- * #24, #66). A user may belong to any number of households
+ * household-scoped settings/notes/pets/shopping list/staples/calendar
+ * (issues #7, #24, #66, #13). A user may belong to any number of households
  * (household_members has no uniqueness constraint on user_id alone).
  * Invites target either an existing registered user (looked up by username
  * then email, mirroring AuthService::register()'s own validation order) or,
@@ -43,6 +44,7 @@ final class HouseholdService
         private readonly HouseholdPetRepository $pets,
         private readonly HouseholdShoppingItemRepository $shoppingItems,
         private readonly HouseholdStapleItemRepository $staples,
+        private readonly HouseholdCalendarEventRepository $calendarEvents,
     ) {
     }
 
@@ -586,6 +588,178 @@ final class HouseholdService
         }
 
         return [$name, $species, $breed, $birthday, $notes];
+    }
+
+    /**
+     * listCalendarEvents(...)/createCalendarEvent(...) - a shared household
+     * resource like pets, not a per-user one: any member may add an event.
+     * Editing/deleting, unlike pets, is author-only (updateCalendarEvent()/
+     * deleteCalendarEvent() below) -- same reasoning as notes: this table
+     * carries private content, unlike pets/tasks/shopping/staples.
+     *
+     * The three-tier visibility model (issue #13) is enforced entirely
+     * here, at read time, never left to the frontend: HouseholdCalendarEvent
+     * Repository::listVisibleTo() already excludes another member's
+     * 'private' events at the SQL level, so this only has to redact
+     * 'busy' ones down to their blocked time slot -- title, description,
+     * location, and who created/is responsible for it are all stripped for
+     * anyone but the creator, who always sees their own events in full
+     * regardless of visibility (same "you always see your own stuff"
+     * principle listNotes() already establishes for private notes).
+     */
+    public function listCalendarEvents(int $callerId, int $householdId, string $from, string $to): array
+    {
+        $this->requireMember($householdId, $callerId);
+
+        $rows = $this->calendarEvents->listVisibleTo($householdId, $callerId, $from, $to);
+
+        return array_map(
+            fn (array $row): array => $this->redactCalendarEvent($row, $callerId),
+            $rows
+        );
+    }
+
+    public function createCalendarEvent(
+        int $callerId,
+        int $householdId,
+        string $title,
+        ?string $description,
+        string $startsAt,
+        string $endsAt,
+        ?string $location,
+        ?int $responsibleUserId,
+        string $visibility
+    ): array {
+        $this->requireMember($householdId, $callerId);
+        [$title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility] =
+            $this->validateCalendarEventInput($householdId, $title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility);
+
+        return $this->calendarEvents->create(
+            $householdId,
+            $callerId,
+            $title,
+            $description,
+            $startsAt,
+            $endsAt,
+            $location,
+            $responsibleUserId,
+            $visibility
+        );
+    }
+
+    public function updateCalendarEvent(
+        int $callerId,
+        int $eventId,
+        string $title,
+        ?string $description,
+        string $startsAt,
+        string $endsAt,
+        ?string $location,
+        ?int $responsibleUserId,
+        string $visibility
+    ): array {
+        $event = $this->requireOwnCalendarEvent($callerId, $eventId);
+        [$title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility] =
+            $this->validateCalendarEventInput((int) $event['household_id'], $title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility);
+
+        $this->calendarEvents->update($eventId, $title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility);
+
+        return $this->calendarEvents->findById($eventId);
+    }
+
+    public function deleteCalendarEvent(int $callerId, int $eventId): void
+    {
+        $event = $this->requireOwnCalendarEvent($callerId, $eventId);
+        $this->calendarEvents->delete((int) $event['id']);
+    }
+
+    /**
+     * redactCalendarEvent(...) - the caller's own events (any visibility)
+     * and any 'public' event pass through untouched; a 'busy' event of
+     * another member's is reduced to just enough to render a blocked-off
+     * slot on the calendar, nothing else -- see this method family's own
+     * class-level docblock note above listCalendarEvents().
+     */
+    private function redactCalendarEvent(array $row, int $callerId): array
+    {
+        if ((int) $row['created_by_user_id'] === $callerId || $row['visibility'] === 'public') {
+            return $row;
+        }
+
+        return [
+            'id' => (int) $row['id'],
+            'household_id' => (int) $row['household_id'],
+            'starts_at' => $row['starts_at'],
+            'ends_at' => $row['ends_at'],
+            'visibility' => $row['visibility'],
+        ];
+    }
+
+    private function requireOwnCalendarEvent(int $callerId, int $eventId): array
+    {
+        $event = $this->calendarEvents->findById($eventId);
+        if ($event === null) {
+            throw new CalendarEventNotFoundException('Calendar event not found.');
+        }
+
+        $this->requireMember((int) $event['household_id'], $callerId);
+
+        if ((int) $event['created_by_user_id'] !== $callerId) {
+            throw new NotAuthorizedToModifyCalendarEventException(
+                'Only the member who created this event can edit or delete it.'
+            );
+        }
+
+        return $event;
+    }
+
+    private function validateCalendarEventInput(
+        int $householdId,
+        string $title,
+        ?string $description,
+        string $startsAt,
+        string $endsAt,
+        ?string $location,
+        ?int $responsibleUserId,
+        string $visibility
+    ): array {
+        $title = trim($title);
+        if ($title === '' || strlen($title) > 150) {
+            throw new \InvalidArgumentException('Event title must be 1-150 characters.');
+        }
+
+        $description = $description !== null ? trim($description) : null;
+        $description = $description === '' ? null : $description;
+        if ($description !== null && strlen($description) > 2000) {
+            throw new \InvalidArgumentException('Description must be 2000 characters or fewer.');
+        }
+
+        $startsAtTime = strtotime($startsAt);
+        $endsAtTime = strtotime($endsAt);
+        if ($startsAtTime === false || $endsAtTime === false) {
+            throw new \InvalidArgumentException('starts_at and ends_at must be valid dates/times.');
+        }
+        if ($endsAtTime <= $startsAtTime) {
+            throw new \InvalidArgumentException('ends_at must be after starts_at.');
+        }
+        $startsAt = date('Y-m-d H:i:s', $startsAtTime);
+        $endsAt = date('Y-m-d H:i:s', $endsAtTime);
+
+        $location = $location !== null ? trim($location) : null;
+        $location = $location === '' ? null : $location;
+        if ($location !== null && strlen($location) > 255) {
+            throw new \InvalidArgumentException('Location must be 255 characters or fewer.');
+        }
+
+        if ($responsibleUserId !== null && $this->members->find($householdId, $responsibleUserId) === null) {
+            throw new \InvalidArgumentException('The responsible party must be a member of this household.');
+        }
+
+        if (!in_array($visibility, ['private', 'busy', 'public'], true)) {
+            throw new \InvalidArgumentException('visibility must be "private", "busy", or "public".');
+        }
+
+        return [$title, $description, $startsAt, $endsAt, $location, $responsibleUserId, $visibility];
     }
 
     private function requireMember(int $householdId, int $userId): void
