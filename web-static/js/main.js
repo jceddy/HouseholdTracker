@@ -504,15 +504,9 @@
         input.placeholder = kind === 'email' ? 'Email address' : 'Phone number';
         input.value = (entry && entry[kind]) || '';
 
-        const removeButton = document.createElement('button');
-        removeButton.type = 'button';
-        removeButton.className = 'button--compact';
-        removeButton.textContent = 'Remove';
-        removeButton.addEventListener('click', () => row.remove());
-
         row.appendChild(select);
         row.appendChild(input);
-        row.appendChild(removeButton);
+        row.appendChild(buildIconButton(DELETE_ICON, 'Remove', () => row.remove()));
         containerEl.appendChild(row);
     }
 
