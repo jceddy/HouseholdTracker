@@ -236,6 +236,24 @@ above remains the only way migrations reach the deployed database.
   address` to 500 chars now that the web UI renders it as a multi-line
   `<textarea>`. See "Household contacts" in `php-app/README.md`.
 
+- **Household meetings** (`0036`, issue #8): `household_meetings` -- when
+  a meeting happened (`occurred_at`, plain `DATETIME`, no timezone
+  conversion, same as every other date/time column in this schema) and
+  freeform `notes` (`TEXT`, like `household_notes.body` -- meeting notes
+  can run long). Same no-privacy-tiers permission model as
+  `household_contacts`/`household_pets`.
+  `household_meeting_attendees` is a plain `(meeting_id, user_id)`
+  composite-key join table with no id/timestamps of its own, same shape
+  as `household_task_assignees` -- always replaced wholesale
+  (`HouseholdMeetingRepository::replaceAttendees()`), never edited row by
+  row. A meeting's own action-item tasks are *not* a table here -- plain
+  `household_tasks` tagged `source_type = 'meeting'`, the same
+  `source_type`/`source_id` reuse `home_improvement_projects` (`0015`)
+  already established; no schema change needed on `household_tasks`
+  itself, since `source_type` is a plain `VARCHAR(50)`, not an `ENUM`
+  (see `0008`'s own comment). See "Household meetings" in
+  `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.
