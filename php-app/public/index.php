@@ -90,6 +90,32 @@ function requestBody(): array
     return $_POST;
 }
 
+/**
+ * parseContactEntries(...) - normalizes the request body's `phones`/
+ * `emails` array (a contact, issue #16 follow-up, may have any number of
+ * each) into the `['label' => ..., $valueKey => ...]` shape
+ * HouseholdService::createContact()/updateContact() expect. Malformed
+ * entries (not an array, missing keys) just come out as empty strings --
+ * real validation happens in HouseholdService, this is only shaping the
+ * raw request body.
+ */
+function parseContactEntries(mixed $raw, string $valueKey): array
+{
+    if (!is_array($raw)) {
+        return [];
+    }
+
+    $entries = [];
+    foreach ($raw as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        $entries[] = ['label' => (string) ($entry['label'] ?? ''), $valueKey => (string) ($entry[$valueKey] ?? '')];
+    }
+
+    return $entries;
+}
+
 function respond(int $status, array $body): never
 {
     http_response_code($status);
@@ -975,8 +1001,8 @@ if ($path === '/households/contacts' && $method === 'POST') {
             (int) ($body['household_id'] ?? 0),
             (string) ($body['name'] ?? ''),
             isset($body['category']) ? (string) $body['category'] : null,
-            isset($body['phone']) ? (string) $body['phone'] : null,
-            isset($body['email']) ? (string) $body['email'] : null,
+            parseContactEntries($body['phones'] ?? [], 'phone'),
+            parseContactEntries($body['emails'] ?? [], 'email'),
             isset($body['address']) ? (string) $body['address'] : null,
             isset($body['notes']) ? (string) $body['notes'] : null
         );
@@ -998,8 +1024,8 @@ if ($path === '/households/contacts/update' && $method === 'POST') {
             (int) ($body['contact_id'] ?? 0),
             (string) ($body['name'] ?? ''),
             isset($body['category']) ? (string) $body['category'] : null,
-            isset($body['phone']) ? (string) $body['phone'] : null,
-            isset($body['email']) ? (string) $body['email'] : null,
+            parseContactEntries($body['phones'] ?? [], 'phone'),
+            parseContactEntries($body['emails'] ?? [], 'email'),
             isset($body['address']) ? (string) $body['address'] : null,
             isset($body['notes']) ? (string) $body['notes'] : null
         );

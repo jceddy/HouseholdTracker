@@ -214,16 +214,27 @@ above remains the only way migrations reach the deployed database.
 - **Household contacts** (`0030`, issue #16): `household_contacts` -- a
   general-purpose address book (vet, doctor, plumber, ...), split off from
   `household_pets` rather than a `vet_*` field bolted onto it. Same
-  no-privacy-tiers permission model as `household_pets`.
-  `category`/`phone`/`address` are free text, like `household_shopping_
-  items.category`; `email` is validated as a real address at the
-  application layer, not by the schema.
+  no-privacy-tiers permission model as `household_pets`. `category`/
+  `address` are free text, like `household_shopping_items.category`; this
+  migration also shipped single nullable `phone`/`email` columns, since
+  replaced by `0033` below.
 - **Pets link to a vet contact** (`0031`, issue #16 follow-up): adds
   `household_pets.vet_contact_id`, nullable, `ON DELETE SET NULL` (like
   `household_tasks.assigned_to_user_id`) -- left out of `0007` because
   `household_contacts` didn't exist yet for it to reference (see that
   migration's own comment). See "Household contacts" in
   `php-app/README.md`.
+- **Multiple phones/emails per contact** (`0033`, issue #16 follow-up):
+  replaces `household_contacts.phone`/`email` (single nullable columns)
+  with `household_contact_phones`/`household_contact_emails`, proper
+  one-to-many child tables (`contact_id` FK, `ON DELETE CASCADE`), each row
+  labeled `home`/`mobile`/`work` (`ENUM` -- a genuinely closed set, unlike
+  `category`'s own freeform one). Backfills any existing single value into
+  the new tables (as a `home`-labeled entry) before dropping the old
+  columns, the same backfill-then-drop shape `0010` used for
+  `household_tasks.assigned_to_user_id`. Also widens `household_contacts.
+  address` to 500 chars now that the web UI renders it as a multi-line
+  `<textarea>`. See "Household contacts" in `php-app/README.md`.
 
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own

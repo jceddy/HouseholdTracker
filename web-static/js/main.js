@@ -474,6 +474,73 @@
         }
     }
 
+    const CONTACT_LABELS = ['home', 'mobile', 'work'];
+
+    function capitalizeContactLabel(label) {
+        return label.charAt(0).toUpperCase() + label.slice(1);
+    }
+
+    // buildContactEntryRow(...) - appends one phone/email row (a label
+    // <select> + value <input> + Remove button) to containerEl. kind is
+    // 'phone' or 'email'; entry, if given, pre-fills the row for editing
+    // (contact.phones/contact.emails' own {label, phone|email} shape) --
+    // omitted for a blank row added via "+ Add phone"/"+ Add email".
+    function buildContactEntryRow(containerEl, kind, entry) {
+        const row = document.createElement('div');
+        row.className = 'form-row contact-entry-row';
+
+        const select = document.createElement('select');
+        for (const label of CONTACT_LABELS) {
+            const option = document.createElement('option');
+            option.value = label;
+            option.textContent = capitalizeContactLabel(label);
+            select.appendChild(option);
+        }
+        select.value = (entry && entry.label) || 'home';
+
+        const input = document.createElement('input');
+        input.type = kind === 'email' ? 'email' : 'text';
+        input.maxLength = kind === 'email' ? 255 : 50;
+        input.placeholder = kind === 'email' ? 'Email address' : 'Phone number';
+        input.value = (entry && entry[kind]) || '';
+
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'button--compact';
+        removeButton.textContent = 'Remove';
+        removeButton.addEventListener('click', () => row.remove());
+
+        row.appendChild(select);
+        row.appendChild(input);
+        row.appendChild(removeButton);
+        containerEl.appendChild(row);
+    }
+
+    // collectContactEntries(...) - reads containerEl's rows back into the
+    // [{label, phone|email}, ...] shape the API expects, skipping any row
+    // whose value was left blank (an added-then-abandoned row).
+    function collectContactEntries(containerEl, kind) {
+        const entries = [];
+        for (const row of containerEl.children) {
+            const value = row.querySelector('input').value.trim();
+            if (value !== '') {
+                entries.push({ label: row.querySelector('select').value, [kind]: value });
+            }
+        }
+
+        return entries;
+    }
+
+    function formatContactLabel(contact) {
+        const details = [
+            contact.category,
+            ...(contact.phones || []).map((p) => `${capitalizeContactLabel(p.label)}: ${p.phone}`),
+            ...(contact.emails || []).map((e) => `${capitalizeContactLabel(e.label)}: ${e.email}`),
+        ].filter(Boolean);
+
+        return details.length ? `${contact.name} (${details.join(', ')})` : contact.name;
+    }
+
     async function loadContacts(householdId) {
         const { response, body } = await apiRequest('/households/contacts?household_id=' + householdId);
         const list = document.getElementById('household-contacts-list');
@@ -487,8 +554,7 @@
         populateVetSelect(document.getElementById('household-pet-vet-contact'));
 
         for (const contact of body.contacts) {
-            const label = contact.category ? `${contact.name} (${contact.category})` : contact.name;
-            const { li, actions } = buildListItem(label);
+            const { li, actions } = buildListItem(formatContactLabel(contact));
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderContactEditForm(li, contact, householdId)));
             actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
                 await apiRequest('/households/contacts/delete', {
@@ -525,9 +591,46 @@
         const nameInput = textField('Name', contact.name, 150);
         nameInput.required = true;
         const categoryInput = textField('Category', contact.category, 50);
-        const phoneInput = textField('Phone', contact.phone, 50);
-        const emailInput = textField('Email', contact.email, 255, 'email');
-        const addressInput = textField('Address', contact.address, 255);
+
+        const phonesLabel = document.createElement('span');
+        phonesLabel.textContent = 'Phone numbers';
+        form.appendChild(phonesLabel);
+        const phonesContainer = document.createElement('div');
+        phonesContainer.className = 'contact-entries';
+        for (const phone of contact.phones || []) {
+            buildContactEntryRow(phonesContainer, 'phone', phone);
+        }
+        form.appendChild(phonesContainer);
+        const addPhoneButton = document.createElement('button');
+        addPhoneButton.type = 'button';
+        addPhoneButton.className = 'button--compact';
+        addPhoneButton.textContent = '+ Add phone';
+        addPhoneButton.addEventListener('click', () => buildContactEntryRow(phonesContainer, 'phone'));
+        form.appendChild(addPhoneButton);
+
+        const emailsLabel = document.createElement('span');
+        emailsLabel.textContent = 'Email addresses';
+        form.appendChild(emailsLabel);
+        const emailsContainer = document.createElement('div');
+        emailsContainer.className = 'contact-entries';
+        for (const email of contact.emails || []) {
+            buildContactEntryRow(emailsContainer, 'email', email);
+        }
+        form.appendChild(emailsContainer);
+        const addEmailButton = document.createElement('button');
+        addEmailButton.type = 'button';
+        addEmailButton.className = 'button--compact';
+        addEmailButton.textContent = '+ Add email';
+        addEmailButton.addEventListener('click', () => buildContactEntryRow(emailsContainer, 'email'));
+        form.appendChild(addEmailButton);
+
+        const addressLabel = document.createElement('label');
+        addressLabel.textContent = 'Address';
+        const addressTextarea = document.createElement('textarea');
+        addressTextarea.value = contact.address || '';
+        addressTextarea.maxLength = 500;
+        addressLabel.appendChild(addressTextarea);
+        form.appendChild(addressLabel);
 
         const notesLabel = document.createElement('label');
         notesLabel.textContent = 'Notes';
@@ -565,9 +668,9 @@
                     contact_id: contact.id,
                     name: nameInput.value,
                     category: categoryInput.value,
-                    phone: phoneInput.value,
-                    email: emailInput.value,
-                    address: addressInput.value,
+                    phones: collectContactEntries(phonesContainer, 'phone'),
+                    emails: collectContactEntries(emailsContainer, 'email'),
+                    address: addressTextarea.value,
                     notes: notesTextarea.value,
                 }),
             });
@@ -2371,6 +2474,11 @@
         messageEl.hidden = false;
     });
 
+    const householdContactPhones = document.getElementById('household-contact-phones');
+    const householdContactEmails = document.getElementById('household-contact-emails');
+    document.getElementById('household-contact-add-phone').addEventListener('click', () => buildContactEntryRow(householdContactPhones, 'phone'));
+    document.getElementById('household-contact-add-email').addEventListener('click', () => buildContactEntryRow(householdContactEmails, 'email'));
+
     document.getElementById('household-contact-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -2383,8 +2491,8 @@
                 household_id: currentHouseholdId,
                 name: form.name.value,
                 category: form.category.value,
-                phone: form.phone.value,
-                email: form.email.value,
+                phones: collectContactEntries(householdContactPhones, 'phone'),
+                emails: collectContactEntries(householdContactEmails, 'email'),
                 address: form.address.value,
                 notes: form.notes.value,
             }),
@@ -2392,6 +2500,8 @@
 
         if (response.ok) {
             form.reset();
+            householdContactPhones.innerHTML = '';
+            householdContactEmails.innerHTML = '';
             await loadContacts(currentHouseholdId);
             return;
         }

@@ -103,9 +103,9 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/notes`       | `{"household_id", "visibility": "private"\|"public", "body"}` | Requires auth; `403` if the caller isn't a member. `body`: 1-20,000 chars, `400` otherwise. Returns `{"note"}`. |
 | POST   | `/households/notes/update` | `{"note_id", "visibility", "body"}`               | Requires auth. `404` if no such note; `403` unless the caller is the note's own author (public notes included — see below). |
 | POST   | `/households/notes/delete` | `{"note_id"}`                                     | Requires auth. Same `404`/`403` rules as `/households/notes/update`. |
-| GET    | `/households/contacts`    | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every contact in the household — no privacy tiers, same as pets. Returns `{"contacts": [{"id","household_id","name","category","phone","email","address","notes","created_by_user_id","created_at","updated_at"}]}`. |
-| POST   | `/households/contacts`    | `{"household_id", "name", "category"?, "phone"?, "email"?, "address"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category` (free text, like the shopping list's): ≤50 chars; `phone`: ≤50 chars; `email`: ≤255 chars, must be a valid address if given; `address`: ≤255 chars; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"contact"}`. |
-| POST   | `/households/contacts/update` | `{"contact_id", "name", "category"?, "phone"?, "email"?, "address"?, "notes"?}` | Requires auth. `404` if no such contact; `403` if the caller isn't a member of that contact's household. Any member may update it — see below. |
+| GET    | `/households/contacts`    | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every contact in the household — no privacy tiers, same as pets. Returns `{"contacts": [{"id","household_id","name","category","phones","emails","address","notes","created_by_user_id","created_at","updated_at"}]}` — `phones`/`emails` are each `[{"label": "home"\|"mobile"\|"work", "phone"\|"email": string}, ...]`, any number including zero. |
+| POST   | `/households/contacts`    | `{"household_id", "name", "category"?, "phones"?: [{"label", "phone"}], "emails"?: [{"label", "email"}], "address"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category` (free text, like the shopping list's): ≤50 chars; each `phones[].label`/`emails[].label` must be `"home"`, `"mobile"`, or `"work"`; each `phone`: 1-50 chars; each `email`: 1-255 chars and a valid address; `address` (multi-line, e.g. street/city/state/zip on separate lines): ≤500 chars; `notes`: ≤2000 chars. `400` on any validation failure. Returns `{"contact"}`. |
+| POST   | `/households/contacts/update` | `{"contact_id", "name", "category"?, "phones"?, "emails"?, "address"?, "notes"?}` | Requires auth. `404` if no such contact; `403` if the caller isn't a member of that contact's household. Any member may update it — see below. Same validation as create; `phones`/`emails`, if given, wholesale-replace the contact's existing set rather than merging with it. |
 | POST   | `/households/contacts/delete` | `{"contact_id"}`                              | Requires auth. Same `404`/`403` rules as `/households/contacts/update`. |
 | GET    | `/households/pets`        | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every pet in the household — no privacy tiers, unlike notes. Returns `{"pets": [{"id","household_id","name","species","breed","birthday","notes","vet_contact_id","created_by_user_id","created_at","updated_at"}]}`. |
 | POST   | `/households/pets`        | `{"household_id", "name", "species"?, "breed"?, "birthday"?, "notes"?, "vet_contact_id"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-100 chars; `birthday`: `YYYY-MM-DD` if given; `notes`: ≤2000 chars; `vet_contact_id`, if given, must be a contact (see `/households/contacts` above) in the same household. `400` on any validation failure. Returns `{"pet"}`. |
@@ -391,10 +391,34 @@ same "open-ended list, not a small fixed set worth hardcoding" reasoning
 the shopping list's and staples' own `category` columns already use, one
 of two open questions the issue itself raised (a fixed dropdown vs.
 freeform text); a household's contact categories are too varied to
-usefully enumerate up front. `email`, if given, is validated as a real
-email address (`FILTER_VALIDATE_EMAIL`); `phone`/`address` are free text
-with no format validation, since phone number and address formats vary
-too much to usefully constrain.
+usefully enumerate up front. `address` is free text with no format
+validation (street number/city/state/zip formats vary too much to usefully
+constrain), rendered as a multi-line `<textarea>` in the web UI rather
+than a single-line input, and stored at up to 500 chars to comfortably
+hold several lines.
+
+**Multiple phones/emails, each labeled** (issue #16 follow-up, migration
+`0033`): a contact isn't limited to one phone number or one email —
+`household_contact_phones`/`household_contact_emails` are child tables
+(`contact_id` FK, `ON DELETE CASCADE`), each row an entry labeled `home`,
+`mobile`, or `work` (`ENUM`, a genuinely closed, well-known set — unlike
+`category`'s own open-ended one). `HouseholdService::createContact()`/
+`updateContact()` take `$phones`/`$emails` as plain arrays and replace a
+contact's set of each *wholesale* on every save
+(`HouseholdContactRepository::replacePhones()`/`replaceEmails()`,
+delete-then-reinsert) rather than diffing against what's already there —
+the same "edited as a whole via the UI, not incrementally" approach a
+task's assignee list (issue #12) already uses, and for the same reason: a
+short list is simpler to just replace outright than to reconcile. Each
+email, if given, is validated as a real address (`FILTER_VALIDATE_EMAIL`);
+phone numbers are free text with no format validation, since formats vary
+by country/convention too much to usefully constrain.
+
+The original single nullable `phone`/`email` columns this table shipped
+with are gone — migration `0033` backfills any existing value into the new
+tables (as a `home`-labeled entry) before dropping the old columns, the
+same backfill-then-drop shape migration `0010` already used when
+`household_tasks.assigned_to_user_id` became a many-to-many table.
 
 **Pets link to a vet contact** (`household_pets.vet_contact_id`, migration
 `0031`) — the issue's other open question (block pets on this landing
