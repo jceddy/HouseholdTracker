@@ -97,14 +97,18 @@
                 <label>Category
                     <input type="text" id="household-contact-category" name="category" maxlength="50" placeholder="e.g. Veterinarian, Plumber">
                 </label>
-                <label>Phone
-                    <input type="text" id="household-contact-phone" name="phone" maxlength="50">
-                </label>
-                <label>Email
-                    <input type="email" id="household-contact-email" name="email" maxlength="255">
-                </label>
+                <div>
+                    <span>Phone numbers</span>
+                    <div id="household-contact-phones" class="contact-entries"></div>
+                    <button type="button" id="household-contact-add-phone" class="button--compact">+ Add phone</button>
+                </div>
+                <div>
+                    <span>Email addresses</span>
+                    <div id="household-contact-emails" class="contact-entries"></div>
+                    <button type="button" id="household-contact-add-email" class="button--compact">+ Add email</button>
+                </div>
                 <label>Address
-                    <input type="text" id="household-contact-address" name="address" maxlength="255">
+                    <textarea id="household-contact-address" name="address" maxlength="500"></textarea>
                 </label>
                 <label>Notes
                     <textarea id="household-contact-notes" name="notes" maxlength="2000"></textarea>

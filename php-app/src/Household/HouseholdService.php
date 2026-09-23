@@ -372,22 +372,30 @@ final class HouseholdService
      * table instead of duplicating contact fields. Same "no privacy tiers,
      * any member may add/edit/remove" permission model as pets -- shared
      * reference data, not privacy-bearing content.
+     *
+     * $phones/$emails (issue #16 follow-up) are arrays of
+     * `['label' => 'home'|'mobile'|'work', 'phone' => string]`/
+     * `['label' => ..., 'email' => string]` -- a contact may have any
+     * number of each, replaced wholesale on every save (see
+     * HouseholdContactRepository::replacePhones()/replaceEmails()), the
+     * same "edited as a whole, not diffed" approach a task's assignee list
+     * already uses.
      */
     public function createContact(
         int $callerId,
         int $householdId,
         string $name,
         ?string $category,
-        ?string $phone,
-        ?string $email,
+        array $phones,
+        array $emails,
         ?string $address,
         ?string $notes
     ): array {
         $this->requireMember($householdId, $callerId);
-        [$name, $category, $phone, $email, $address, $notes] =
-            $this->validateContactInput($name, $category, $phone, $email, $address, $notes);
+        [$name, $category, $phones, $emails, $address, $notes] =
+            $this->validateContactInput($name, $category, $phones, $emails, $address, $notes);
 
-        return $this->contacts->create($householdId, $callerId, $name, $category, $phone, $email, $address, $notes);
+        return $this->contacts->create($householdId, $callerId, $name, $category, $phones, $emails, $address, $notes);
     }
 
     public function updateContact(
@@ -395,15 +403,15 @@ final class HouseholdService
         int $contactId,
         string $name,
         ?string $category,
-        ?string $phone,
-        ?string $email,
+        array $phones,
+        array $emails,
         ?string $address,
         ?string $notes
     ): array {
         $contact = $this->requireMemberForContact($callerId, $contactId);
-        [$name, $category, $phone, $email, $address, $notes] =
-            $this->validateContactInput($name, $category, $phone, $email, $address, $notes);
-        $this->contacts->update((int) $contact['id'], $name, $category, $phone, $email, $address, $notes);
+        [$name, $category, $phones, $emails, $address, $notes] =
+            $this->validateContactInput($name, $category, $phones, $emails, $address, $notes);
+        $this->contacts->update((int) $contact['id'], $name, $category, $phones, $emails, $address, $notes);
 
         return $this->contacts->findById((int) $contact['id']);
     }
@@ -681,11 +689,13 @@ final class HouseholdService
         return $contact;
     }
 
+    private const CONTACT_LABELS = ['home', 'mobile', 'work'];
+
     private function validateContactInput(
         string $name,
         ?string $category,
-        ?string $phone,
-        ?string $email,
+        array $phones,
+        array $emails,
         ?string $address,
         ?string $notes
     ): array {
@@ -700,27 +710,13 @@ final class HouseholdService
             throw new \InvalidArgumentException('Category must be 50 characters or fewer.');
         }
 
-        $phone = $phone !== null ? trim($phone) : null;
-        $phone = $phone === '' ? null : $phone;
-        if ($phone !== null && strlen($phone) > 50) {
-            throw new \InvalidArgumentException('Phone must be 50 characters or fewer.');
-        }
-
-        $email = $email !== null ? trim($email) : null;
-        $email = $email === '' ? null : $email;
-        if ($email !== null) {
-            if (strlen($email) > 255) {
-                throw new \InvalidArgumentException('Email must be 255 characters or fewer.');
-            }
-            if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-                throw new \InvalidArgumentException('Email must be a valid email address.');
-            }
-        }
+        $phones = $this->validateContactPhones($phones);
+        $emails = $this->validateContactEmails($emails);
 
         $address = $address !== null ? trim($address) : null;
         $address = $address === '' ? null : $address;
-        if ($address !== null && strlen($address) > 255) {
-            throw new \InvalidArgumentException('Address must be 255 characters or fewer.');
+        if ($address !== null && strlen($address) > 500) {
+            throw new \InvalidArgumentException('Address must be 500 characters or fewer.');
         }
 
         $notes = $notes !== null ? trim($notes) : null;
@@ -729,7 +725,56 @@ final class HouseholdService
             throw new \InvalidArgumentException('Contact notes must be 2000 characters or fewer.');
         }
 
-        return [$name, $category, $phone, $email, $address, $notes];
+        return [$name, $category, $phones, $emails, $address, $notes];
+    }
+
+    /**
+     * validateContactPhones(...)/validateContactEmails(...) - each entry's
+     * label must be one of the closed CONTACT_LABELS set (unlike a
+     * contact's own freeform category); a contact may have any number of
+     * phones/emails, including zero.
+     */
+    private function validateContactPhones(array $phones): array
+    {
+        $validated = [];
+        foreach ($phones as $phone) {
+            $label = (string) ($phone['label'] ?? '');
+            if (!in_array($label, self::CONTACT_LABELS, true)) {
+                throw new \InvalidArgumentException('Phone label must be "home", "mobile", or "work".');
+            }
+
+            $value = trim((string) ($phone['phone'] ?? ''));
+            if ($value === '' || strlen($value) > 50) {
+                throw new \InvalidArgumentException('Each phone number must be 1-50 characters.');
+            }
+
+            $validated[] = ['label' => $label, 'phone' => $value];
+        }
+
+        return $validated;
+    }
+
+    private function validateContactEmails(array $emails): array
+    {
+        $validated = [];
+        foreach ($emails as $email) {
+            $label = (string) ($email['label'] ?? '');
+            if (!in_array($label, self::CONTACT_LABELS, true)) {
+                throw new \InvalidArgumentException('Email label must be "home", "mobile", or "work".');
+            }
+
+            $value = trim((string) ($email['email'] ?? ''));
+            if ($value === '' || strlen($value) > 255) {
+                throw new \InvalidArgumentException('Each email must be 1-255 characters.');
+            }
+            if (filter_var($value, FILTER_VALIDATE_EMAIL) === false) {
+                throw new \InvalidArgumentException('Each email must be a valid email address.');
+            }
+
+            $validated[] = ['label' => $label, 'email' => $value];
+        }
+
+        return $validated;
     }
 
     /**
