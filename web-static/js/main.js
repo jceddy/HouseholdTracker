@@ -300,6 +300,10 @@
         // Same idea for a still-open project detail panel from whichever
         // household was open before this one.
         closeProjectDetail();
+        // Same reset idea, for a still-open meeting detail panel.
+        closeMeetingDetail();
+        // Same reset idea, for the poll creation form's option rows.
+        resetPollOptionRows(document.getElementById('household-poll-options'));
         // Same reset idea, for the calendar's own edit-in-progress state
         // and its "which week" position.
         currentCalendarRangeStart = startOfWeek(new Date());
@@ -314,6 +318,8 @@
         await loadShoppingList(householdId);
         await loadStaples(householdId);
         await loadCalendar(householdId);
+        await loadMeetings(householdId);
+        await loadPolls(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -340,6 +346,7 @@
         currentMembers = body.members;
         populateAssigneeCheckboxes(document.getElementById('household-task-assignees'));
         populateAssigneeCheckboxes(document.getElementById('hi-maintenance-assignees'));
+        populateAssigneeCheckboxes(document.getElementById('household-meeting-attendees'));
 
         for (const member of body.members) {
             const { li, actions } = buildListItem(`${member.username} (${member.role})`);
@@ -530,6 +537,40 @@
         }
 
         return entries;
+    }
+
+    // buildPollOptionRow(...)/collectPollOptionTexts(...)/
+    // resetPollOptionRows(...) - same repeatable-row shape as
+    // buildContactEntryRow()/collectContactEntries(), but for a poll's
+    // fixed-at-creation option list (issue #27) rather than phones/emails.
+    // A blank row left empty at submit time is silently dropped, same as
+    // an abandoned contact entry row.
+    function buildPollOptionRow(containerEl, value) {
+        const row = document.createElement('div');
+        row.className = 'form-row poll-option-row';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 200;
+        input.placeholder = 'Option';
+        input.value = value || '';
+        row.appendChild(input);
+        row.appendChild(buildIconButton(DELETE_ICON, 'Remove', () => row.remove()));
+        containerEl.appendChild(row);
+    }
+
+    function collectPollOptionTexts(containerEl) {
+        return Array.from(containerEl.querySelectorAll('input[type="text"]'))
+            .map((input) => input.value.trim())
+            .filter((value) => value !== '');
+    }
+
+    // resetPollOptionRows(...) - reseeds two blank option rows, the
+    // minimum a poll needs (HouseholdPollService::MIN_OPTIONS), so the
+    // create form always starts ready to fill in rather than empty.
+    function resetPollOptionRows(containerEl) {
+        containerEl.innerHTML = '';
+        buildPollOptionRow(containerEl);
+        buildPollOptionRow(containerEl);
     }
 
     // buildContactLabelElement(...) - same info formatCalendarEventLabel-
@@ -909,6 +950,25 @@
         return task.due_at === todayIso();
     }
 
+    // isPollOpen(...)/formatPollStatus(...) - "still accepting votes" is
+    // computed here from status/closes_at, same idea as isTaskOverdue() --
+    // the backend doesn't store a separate open/closed-by-expiry flag (see
+    // migration 0037's own comment). fromMysqlDateTime() is declared
+    // further down this file but hoisted, so it's callable from here.
+    function isPollOpen(poll) {
+        if (poll.status !== 'open') {
+            return false;
+        }
+        return !poll.closes_at || fromMysqlDateTime(poll.closes_at) > new Date();
+    }
+
+    function formatPollStatus(poll) {
+        if (!isPollOpen(poll)) {
+            return 'Closed';
+        }
+        return poll.closes_at ? `Open — closes ${fromMysqlDateTime(poll.closes_at).toLocaleString()}` : 'Open';
+    }
+
     // formatAssigneesBit(...) - shared by formatTaskLabel()/
     // formatMyTaskLabel(): names the assignee(s), and, only when there's
     // more than one (the only time it's not implied), whether completing
@@ -1144,6 +1204,10 @@
     // tracks which project's detail panel (if any) is currently open, the
     // same module-scope-state pattern as currentHouseholdId itself.
     let currentProjectId = null;
+    // currentMeetingId - same singular-expand-detail-panel idea as
+    // currentProjectId, one level over: at most one meeting's own task
+    // list is ever shown open at a time.
+    let currentMeetingId = null;
 
     const PROJECT_STATUS_LABELS = {
         idea: 'Idea',
@@ -1779,6 +1843,323 @@
         document.getElementById('household-calendar-cancel-button').hidden = false;
     }
 
+    // Household meetings (issue #8). Same "no privacy tiers, any member
+    // can add/edit/remove" permission model as pets/contacts -- a meeting
+    // log is shared household information. A meeting's own action-item
+    // tasks are plain household_tasks tagged source_type = 'meeting',
+    // reusing formatTaskLabel()/Complete/Edit/Delete exactly the same way
+    // the Home Improvement tab's project detail panel already does for a
+    // project's own tasks -- see renderMeetingDetailTasks() below.
+    function formatMeetingLabel(meeting) {
+        const when = fromMysqlDateTime(meeting.occurred_at);
+        const dateOpts = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+        const timeOpts = { hour: 'numeric', minute: '2-digit' };
+        const bits = [`${when.toLocaleDateString(undefined, dateOpts)} ${when.toLocaleTimeString(undefined, timeOpts)}`];
+        const attendeeNames = (meeting.attendees || []).map((attendee) => attendee.username);
+        if (attendeeNames.length > 0) {
+            bits.push(`Attendees: ${attendeeNames.join(', ')}`);
+        }
+        return bits.join(' — ');
+    }
+
+    // renderMeetingEditForm(...) - same inline-edit pattern as
+    // renderProjectEditForm()/renderPetEditForm().
+    function renderMeetingEditForm(li, meeting, householdId) {
+        li.innerHTML = '';
+
+        const form = document.createElement('form');
+        form.className = 'inline-edit-form';
+
+        const occurredAtLabel = document.createElement('label');
+        occurredAtLabel.textContent = 'Date/time';
+        const occurredAtInput = document.createElement('input');
+        occurredAtInput.type = 'datetime-local';
+        occurredAtInput.required = true;
+        occurredAtInput.value = formatDateTimeLocal(fromMysqlDateTime(meeting.occurred_at));
+        occurredAtLabel.appendChild(occurredAtInput);
+        form.appendChild(occurredAtLabel);
+
+        const attendeesFieldset = document.createElement('fieldset');
+        attendeesFieldset.className = 'checkbox-fieldset';
+        const attendeesLegend = document.createElement('legend');
+        attendeesLegend.textContent = 'Attendees';
+        attendeesFieldset.appendChild(attendeesLegend);
+        const attendeesContainer = document.createElement('div');
+        attendeesFieldset.appendChild(attendeesContainer);
+        form.appendChild(attendeesFieldset);
+        populateAssigneeCheckboxes(attendeesContainer, (meeting.attendees || []).map((attendee) => attendee.id));
+
+        const notesLabel = document.createElement('label');
+        notesLabel.textContent = 'Notes (decisions made, issues discussed)';
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = meeting.notes || '';
+        notesTextarea.maxLength = 20000;
+        notesLabel.appendChild(notesTextarea);
+        form.appendChild(notesLabel);
+
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.className = 'button--compact';
+        saveButton.textContent = 'Save';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'button--compact';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => loadMeetings(householdId));
+        row.appendChild(saveButton);
+        row.appendChild(cancelButton);
+        form.appendChild(row);
+
+        const messageEl = document.createElement('p');
+        messageEl.className = 'message';
+        messageEl.hidden = true;
+        form.appendChild(messageEl);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const { response, body } = await apiRequest('/households/meetings/update', {
+                method: 'POST',
+                body: JSON.stringify({
+                    meeting_id: meeting.id,
+                    occurred_at: occurredAtInput.value,
+                    attendee_user_ids: getCheckedAssigneeIds(attendeesContainer),
+                    notes: notesTextarea.value,
+                }),
+            });
+
+            if (response.ok) {
+                await loadMeetings(householdId);
+                return;
+            }
+
+            messageEl.textContent = (body && body.message) || 'Could not save meeting.';
+            messageEl.className = 'message message--error';
+            messageEl.hidden = false;
+        });
+
+        li.appendChild(form);
+    }
+
+    async function loadMeetings(householdId) {
+        const { response, body } = await apiRequest('/households/meetings?household_id=' + householdId);
+        const list = document.getElementById('household-meetings-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const meeting of body.meetings) {
+            const { li, actions } = buildListItem(formatMeetingLabel(meeting));
+            actions.appendChild(buildButton('View tasks', () => openMeetingDetail(meeting.id, householdId)));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderMeetingEditForm(li, meeting, householdId)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/meetings/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ meeting_id: meeting.id }),
+                });
+                if (currentMeetingId === meeting.id) {
+                    closeMeetingDetail();
+                }
+                await loadMeetings(householdId);
+            }));
+            list.appendChild(li);
+        }
+
+        // Keep an open meeting detail panel in sync with the list it came
+        // from, same idea as loadProjects()'s own detail-panel refresh.
+        if (currentMeetingId !== null) {
+            await openMeetingDetail(currentMeetingId, householdId);
+        }
+    }
+
+    async function openMeetingDetail(meetingId, householdId) {
+        const { response, body } = await apiRequest('/households/meetings/detail?meeting_id=' + meetingId);
+        if (!response.ok) {
+            closeMeetingDetail();
+            return;
+        }
+
+        currentMeetingId = meetingId;
+        const detail = document.getElementById('household-meeting-detail');
+        detail.hidden = false;
+        document.getElementById('household-meeting-detail-title').textContent = formatMeetingLabel(body.meeting);
+        document.getElementById('household-meeting-detail-info').textContent = body.meeting.notes || '';
+        renderMeetingDetailTasks(body.tasks, householdId);
+        populateAssigneeCheckboxes(document.getElementById('household-meeting-task-assignees'));
+        detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function closeMeetingDetail() {
+        currentMeetingId = null;
+        document.getElementById('household-meeting-detail').hidden = true;
+    }
+
+    async function loadPolls(householdId) {
+        const { response, body } = await apiRequest('/households/polls?household_id=' + householdId);
+        const list = document.getElementById('household-polls-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        for (const poll of body.polls) {
+            list.appendChild(renderPollItem(poll, householdId));
+        }
+    }
+
+    // renderPollItem(...) - a poll's question, status, and its options as
+    // a radio group (single-select) or checkbox group (allow_multiple_
+    // selections), each option labeled with its live vote count and, since
+    // votes aren't anonymous (migration 0037), who voted for it. Own
+    // inputs are pre-checked from option.votes -- same "the voter list
+    // doubles as the current user's own selection" idea as attendee_ids
+    // pre-checking a meeting's attendee checkboxes. Voting inputs/the Vote
+    // button are omitted once the poll is closed (or past closes_at) --
+    // results still show, just not editable.
+    function renderPollItem(poll, householdId) {
+        const li = document.createElement('li');
+        li.className = 'poll-item';
+
+        const question = document.createElement('strong');
+        question.textContent = poll.question;
+        li.appendChild(question);
+
+        const status = document.createElement('p');
+        status.textContent = formatPollStatus(poll);
+        li.appendChild(status);
+
+        const open = isPollOpen(poll);
+        const inputType = poll.allow_multiple_selections ? 'checkbox' : 'radio';
+        const inputName = `poll-${poll.id}-option`;
+
+        const voteForm = document.createElement('form');
+        voteForm.className = 'poll-vote-form';
+
+        for (const option of poll.options) {
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            const input = document.createElement('input');
+            input.type = inputType;
+            input.name = inputName;
+            input.value = String(option.id);
+            input.checked = option.votes.some((voter) => voter.id === user.id);
+            input.disabled = !open;
+            label.appendChild(input);
+            const voteCount = option.votes.length;
+            const voterNames = option.votes.map((voter) => voter.username).join(', ');
+            label.appendChild(document.createTextNode(
+                ` ${option.option_text} — ${voteCount} vote${voteCount === 1 ? '' : 's'}`
+                + (voterNames ? ` (${voterNames})` : '')
+            ));
+            voteForm.appendChild(label);
+        }
+
+        const voteMessageEl = document.createElement('p');
+        voteMessageEl.className = 'message';
+        voteMessageEl.hidden = true;
+
+        if (open) {
+            const voteButton = document.createElement('button');
+            voteButton.type = 'submit';
+            voteButton.textContent = 'Vote';
+            voteForm.appendChild(voteButton);
+            voteForm.appendChild(voteMessageEl);
+
+            voteForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                voteMessageEl.hidden = true;
+                const optionIds = Array.from(voteForm.querySelectorAll(`input[name="${inputName}"]:checked`))
+                    .map((input) => Number(input.value));
+
+                const { response, body } = await apiRequest('/households/polls/vote', {
+                    method: 'POST',
+                    body: JSON.stringify({ poll_id: poll.id, option_ids: optionIds }),
+                });
+
+                if (response.ok) {
+                    await loadPolls(householdId);
+                    return;
+                }
+
+                voteMessageEl.textContent = (body && body.message) || 'Could not save your vote.';
+                voteMessageEl.className = 'message message--error';
+                voteMessageEl.hidden = false;
+            });
+        }
+
+        li.appendChild(voteForm);
+
+        const actions = document.createElement('div');
+        actions.className = 'li-actions';
+        if (open) {
+            actions.appendChild(buildButton('Close poll', async () => {
+                await apiRequest('/households/polls/close', {
+                    method: 'POST',
+                    body: JSON.stringify({ poll_id: poll.id }),
+                });
+                await loadPolls(householdId);
+            }));
+        }
+        actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+            await apiRequest('/households/polls/delete', {
+                method: 'POST',
+                body: JSON.stringify({ poll_id: poll.id }),
+            });
+            await loadPolls(householdId);
+        }));
+        li.appendChild(actions);
+
+        return li;
+    }
+
+    // renderMeetingDetailTasks(...) - a meeting's own linked tasks
+    // (household_tasks tagged source_type = 'meeting', source_id = this
+    // meeting), reusing the exact same formatTaskLabel()/Complete/Edit/
+    // Delete actions the household Tasks tab and the Home Improvement
+    // tab's project detail panel both already use.
+    function renderMeetingDetailTasks(tasks, householdId) {
+        const list = document.getElementById('household-meeting-detail-tasks');
+        list.innerHTML = '';
+
+        if (tasks.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No tasks from this meeting yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const task of tasks) {
+            const { li, actions } = buildListItem(formatTaskLabel(task));
+            if (isDueToday(task)) {
+                li.classList.add('task-due-today');
+            }
+            if (isTaskOverdue(task)) {
+                li.classList.add('task-overdue');
+            }
+            actions.appendChild(buildIconButton(CHECK_ICON, 'Complete', completeTaskWithUndo(task, async () => {
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            })));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => renderTaskEditForm(li, task, householdId, async () => {
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            })));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/tasks/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ instance_id: task.id }),
+                });
+                await loadMeetings(householdId);
+                await loadTasks(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // formatMyTaskLabel(...) - like formatTaskLabel(), but for the cross-
     // household "My Tasks" view: leads with which household the task
     // belongs to. Still shows the assignee bit (unlike before the
@@ -2286,6 +2667,99 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save event.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-meeting-detail-close').addEventListener('click', closeMeetingDetail);
+
+    document.getElementById('household-meeting-task-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-meeting-task-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                title: form.title.value,
+                assigned_to_user_ids: getCheckedAssigneeIds(document.getElementById('household-meeting-task-assignees')),
+                due_at: form.due_at.value,
+                source_type: 'meeting',
+                source_id: currentMeetingId,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMeetings(currentHouseholdId);
+            await loadTasks(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not add task.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-meeting-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-meeting-message');
+        messageEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/meetings', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                occurred_at: form.occurred_at.value,
+                attendee_user_ids: getCheckedAssigneeIds(document.getElementById('household-meeting-attendees')),
+                notes: form.notes.value,
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMeetings(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not log meeting.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-poll-add-option').addEventListener('click', () => {
+        buildPollOptionRow(document.getElementById('household-poll-options'));
+    });
+
+    document.getElementById('household-poll-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-poll-message');
+        messageEl.hidden = true;
+        const optionsContainer = document.getElementById('household-poll-options');
+
+        const { response, body } = await apiRequest('/households/polls', {
+            method: 'POST',
+            body: JSON.stringify({
+                household_id: currentHouseholdId,
+                question: form.question.value,
+                allow_multiple_selections: document.getElementById('household-poll-allow-multiple').checked,
+                closes_at: document.getElementById('household-poll-closes-at').value,
+                options: collectPollOptionTexts(optionsContainer),
+            }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            resetPollOptionRows(optionsContainer);
+            await loadPolls(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not create poll.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });

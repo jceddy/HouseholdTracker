@@ -236,6 +236,40 @@ above remains the only way migrations reach the deployed database.
   address` to 500 chars now that the web UI renders it as a multi-line
   `<textarea>`. See "Household contacts" in `php-app/README.md`.
 
+- **Household meetings** (`0036`, issue #8): `household_meetings` -- when
+  a meeting happened (`occurred_at`, plain `DATETIME`, no timezone
+  conversion, same as every other date/time column in this schema) and
+  freeform `notes` (`TEXT`, like `household_notes.body` -- meeting notes
+  can run long). Same no-privacy-tiers permission model as
+  `household_contacts`/`household_pets`.
+  `household_meeting_attendees` is a plain `(meeting_id, user_id)`
+  composite-key join table with no id/timestamps of its own, same shape
+  as `household_task_assignees` -- always replaced wholesale
+  (`HouseholdMeetingRepository::replaceAttendees()`), never edited row by
+  row. A meeting's own action-item tasks are *not* a table here -- plain
+  `household_tasks` tagged `source_type = 'meeting'`, the same
+  `source_type`/`source_id` reuse `home_improvement_projects` (`0015`)
+  already established; no schema change needed on `household_tasks`
+  itself, since `source_type` is a plain `VARCHAR(50)`, not an `ENUM`
+  (see `0008`'s own comment). See "Household meetings" in
+  `php-app/README.md`.
+
+- **Household polls** (`0037`, issue #27): `household_polls`
+  (`question`, `allow_multiple_selections` `TINYINT(1)`, `status`
+  `ENUM('open', 'closed')`, `closes_at` nullable `DATETIME` for an
+  optional auto-expiry); `household_poll_options`, a fixed-at-creation
+  list (`option_text`, `display_order`); `household_poll_votes`
+  (`poll_id`, `option_id`, `user_id`, unique on all three so a user can't
+  double-vote the same option), always wholesale-replaced per user per
+  poll (`HouseholdPollRepository::replaceVotes()`) rather than diffed,
+  same shape as `household_meeting_attendees`/`household_task_assignees`.
+  Same no-privacy-tiers permission model as `household_contacts`/
+  `household_meetings` -- and votes themselves aren't anonymous either,
+  unlike `household_notes`. Whether a poll still accepts votes is
+  computed from `status`/`closes_at` where it matters rather than stored
+  as its own flag, so no cron job is needed to close an expired poll. See
+  "Household polls" in `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.

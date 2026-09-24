@@ -59,6 +59,8 @@
             <button type="button" class="tab-button" data-tab="shopping-list" role="tab" aria-selected="false">Shopping List</button>
             <button type="button" class="tab-button" data-tab="staples" role="tab" aria-selected="false">Staples</button>
             <button type="button" class="tab-button" data-tab="calendar" role="tab" aria-selected="false">Calendar</button>
+            <button type="button" class="tab-button" data-tab="meetings" role="tab" aria-selected="false">Meetings</button>
+            <button type="button" class="tab-button" data-tab="polls" role="tab" aria-selected="false">Polls</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -396,6 +398,70 @@
                     <button type="button" id="household-calendar-cancel-button" class="button--compact" hidden>Cancel</button>
                 </div>
                 <p id="household-calendar-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-meetings" role="tabpanel" hidden>
+            <ul id="household-meetings-list"></ul>
+
+            <div id="household-meeting-detail" hidden>
+                <h5 id="household-meeting-detail-title"></h5>
+                <p id="household-meeting-detail-info"></p>
+                <ul id="household-meeting-detail-tasks"></ul>
+                <form id="household-meeting-task-form">
+                    <label>Title
+                        <input type="text" id="household-meeting-task-title" name="title" required maxlength="150">
+                    </label>
+                    <fieldset class="checkbox-fieldset">
+                        <legend>Assign to</legend>
+                        <div id="household-meeting-task-assignees"></div>
+                    </fieldset>
+                    <label>Due date
+                        <input type="date" id="household-meeting-task-due-at" name="due_at">
+                    </label>
+                    <button type="submit">Add task</button>
+                    <p id="household-meeting-task-message" class="message" hidden></p>
+                </form>
+                <button type="button" id="household-meeting-detail-close">Close</button>
+            </div>
+
+            <form id="household-meeting-form">
+                <label>Date/time
+                    <input type="datetime-local" id="household-meeting-occurred-at" name="occurred_at" required>
+                </label>
+                <fieldset class="checkbox-fieldset">
+                    <legend>Attendees</legend>
+                    <div id="household-meeting-attendees"></div>
+                </fieldset>
+                <label>Notes (decisions made, issues discussed)
+                    <textarea id="household-meeting-notes" name="notes" maxlength="20000"></textarea>
+                </label>
+                <button type="submit">Log meeting</button>
+                <p id="household-meeting-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-polls" role="tabpanel" hidden>
+            <ul id="household-polls-list"></ul>
+
+            <form id="household-poll-form">
+                <label>Question
+                    <input type="text" id="household-poll-question" name="question" required maxlength="500">
+                </label>
+                <fieldset class="checkbox-fieldset">
+                    <legend>Options</legend>
+                    <div id="household-poll-options" class="poll-option-entries"></div>
+                    <button type="button" id="household-poll-add-option" class="button--compact">+ Add option</button>
+                </fieldset>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="household-poll-allow-multiple" name="allow_multiple_selections">
+                    Allow selecting multiple options
+                </label>
+                <label>Closes at (optional)
+                    <input type="datetime-local" id="household-poll-closes-at" name="closes_at">
+                </label>
+                <button type="submit">Create poll</button>
+                <p id="household-poll-message" class="message" hidden></p>
             </form>
         </div>
 
