@@ -61,6 +61,7 @@
             <button type="button" class="tab-button" data-tab="calendar" role="tab" aria-selected="false">Calendar</button>
             <button type="button" class="tab-button" data-tab="meetings" role="tab" aria-selected="false">Meetings</button>
             <button type="button" class="tab-button" data-tab="polls" role="tab" aria-selected="false">Polls</button>
+            <button type="button" class="tab-button" data-tab="meal-plans" role="tab" aria-selected="false">Meal Plan</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -462,6 +463,42 @@
                 </label>
                 <button type="submit">Create poll</button>
                 <p id="household-poll-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-meal-plans" role="tabpanel" hidden>
+            <div class="form-row">
+                <button type="button" id="household-meal-plan-prev" class="button--compact">&larr; Previous week</button>
+                <span id="household-meal-plan-range-label"></span>
+                <button type="button" id="household-meal-plan-next" class="button--compact">Next week &rarr;</button>
+            </div>
+            <ul id="household-meal-plan-list"></ul>
+            <form id="household-meal-plan-form">
+                <label>Date
+                    <input type="date" id="household-meal-plan-date" name="planned_date" required>
+                </label>
+                <label>Meal
+                    <select id="household-meal-plan-meal-type" name="meal_type">
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                    </select>
+                </label>
+                <label>Title
+                    <input type="text" id="household-meal-plan-title" name="title" required maxlength="150">
+                </label>
+                <label>Ingredients (one per line)
+                    <textarea id="household-meal-plan-ingredients" name="ingredients" maxlength="2000"></textarea>
+                </label>
+                <label>Notes
+                    <textarea id="household-meal-plan-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <div class="form-row">
+                    <button type="submit" id="household-meal-plan-submit-button">Add meal</button>
+                    <button type="button" id="household-meal-plan-cancel-button" class="button--compact" hidden>Cancel</button>
+                </div>
+                <p id="household-meal-plan-message" class="message" hidden></p>
             </form>
         </div>
 
