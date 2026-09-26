@@ -41,7 +41,8 @@ database.
     plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11); `HouseholdMeetingService` (meetings —
-    issue #8); `HouseholdPollService` (household polls — issue #27).
+    issue #8); `HouseholdPollService` (household polls — issue #27);
+    `HouseholdMealPlanService` (meal planning — issue #25).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -153,6 +154,11 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/polls/vote` | `{"poll_id", "option_ids": [int]}`                  | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household; `409` if the poll is closed or past its `closes_at`. `option_ids` becomes the caller's *entire* vote set for this poll, wholesale-replacing whatever they'd voted for before (an empty array clears their vote) — see "Household polls" below. `400` if `option_ids` has more than one entry on a poll with `allow_multiple_selections = false`, or if any id doesn't belong to this poll. Returns `{"poll"}`. |
 | POST   | `/households/polls/close` | `{"poll_id"}`                                       | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household. Any member may close it — see "Household polls" below. Returns `{"poll"}`. |
 | POST   | `/households/polls/delete` | `{"poll_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/polls/close`. |
+| GET    | `/households/meal-plans`  | query params `household_id`, `from`, `to`           | Requires auth; `403` if the caller isn't a member. `from`/`to` are each `YYYY-MM-DD` (`400` if either fails to parse, or if `to` is before `from`) — every meal plan entry with `planned_date` in that inclusive range, ordered by date then meal type (breakfast/lunch/dinner/snack). Returns `{"meal_plans": [{"id","household_id","planned_date","meal_type","title","ingredients","notes","created_by_user_id","created_at","updated_at"}, ...]}`. |
+| POST   | `/households/meal-plans`  | `{"household_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `planned_date`: `YYYY-MM-DD` (`400` otherwise); `meal_type`: one of `"breakfast"`\|`"lunch"`\|`"dinner"`\|`"snack"` (`400` otherwise); `title`: 1-150 chars; `ingredients` (freeform, one per line — see "Household meal planning" below) and `notes`: ≤2000 chars each. `400` on any other validation failure. Returns `{"meal_plan"}`. |
+| POST   | `/households/meal-plans/update` | `{"meal_plan_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth. `404` if no such meal plan; `403` if the caller isn't a member of its household. Any member may update it — see "Household meal planning" below. Same validation as create. Returns `{"meal_plan"}`. |
+| POST   | `/households/meal-plans/delete` | `{"meal_plan_id"}`                            | Requires auth. Same `404`/`403` rules as update. |
+| POST   | `/households/meal-plans/add-to-shopping-list` | `{"meal_plan_id"}`              | Requires auth. Same `404`/`403` rules as update. Splits the meal plan's `ingredients` field into one shopping-list item per non-blank line (via the same `HouseholdShoppingItemRepository::create()` every other shopping-list-adding route uses) — see "Household meal planning" below. Returns `{"items": [...]}` (possibly empty, if `ingredients` is blank or unset). Safe to call more than once; nothing is cleared or consumed. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -977,6 +983,41 @@ computes the same thing for display, the same `isTaskOverdue()`-style
 app) rather than needing a cron job to flip a row once the deadline
 passes. `POST /households/polls/close` closes a poll manually regardless
 of `closes_at`.
+
+## Household meal planning
+
+Plan meals for the week ahead (issue #25, `household_meal_plans`), tied
+into the shopping list (issue #24) for ingredients. Same "no privacy
+tiers, any member can add/edit/remove" permission model as pets/contacts/
+the shopping list/meetings/polls — a meal plan is shared household
+coordination information.
+
+**No structured recipe storage for v1** — a meal plan entry has a plain
+`title` plus a freeform `ingredients` field (one ingredient per line,
+`TEXT`, like every other freeform column in this schema), not a separate
+ingredients-list-with-quantities/instructions model. This settles the
+issue's own "full recipe storage vs. just naming" open question in favor
+of the simpler v1.
+
+**The shopping-list tie-in is a manual, per-entry action, not
+automatic** — `POST /households/meal-plans/add-to-shopping-list` splits
+that one entry's `ingredients` field into one shopping-list item per
+non-blank line (`HouseholdMealPlanService::addIngredientsToShoppingList()`),
+the same shape `HouseholdService::addNeedingRestockStaplesToShoppingList()`
+already uses for staples. Unlike staples, there's nothing to clear
+afterward — a meal plan is a standing record, not a one-shot checklist —
+so the action is safe to repeat (e.g. after removing some items back off
+the shopping list) rather than being a one-time consume.
+
+**No relationship to issue #10's fitness/nutrition tracking** is wired up
+— kept fully independent for v1, per the issue's own third open question.
+
+`planned_date` is a plain `DATE` (no time-of-day — a meal plan entry is
+"which day", not "what time"), validated the same strict
+`DateTime::createFromFormat('Y-m-d', ...)` round-trip check `due_at`
+already uses, not the lenient `strtotime()` parsing calendar events/
+meetings use. `meal_type` is a genuinely closed set (`ENUM`), unlike the
+freeform category/label text columns elsewhere in this schema.
 
 ## LLM usage (Fireworks AI)
 

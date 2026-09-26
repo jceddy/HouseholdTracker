@@ -270,6 +270,21 @@ above remains the only way migrations reach the deployed database.
   as its own flag, so no cron job is needed to close an expired poll. See
   "Household polls" in `php-app/README.md`.
 
+- **Household meal planning** (`0038`, issue #25): `household_meal_plans`
+  (`planned_date` a plain `DATE`, no time-of-day; `meal_type` `ENUM`
+  ('breakfast', 'lunch', 'dinner', 'snack') -- a genuinely closed set,
+  unlike this schema's usual freeform category/label text columns;
+  `title`; freeform `ingredients`/`notes`, both `TEXT`). No structured
+  recipe storage and no automated shopping-list tie-in for v1 -- the
+  shopping-list tie-in is a manual per-entry action
+  (`HouseholdMealPlanService::addIngredientsToShoppingList()`), splitting
+  `ingredients` into one shopping-list item per non-blank line, the same
+  shape `HouseholdService::addNeedingRestockStaplesToShoppingList()`
+  already uses for staples -- unlike staples, nothing is cleared
+  afterward, so it's safe to repeat. Same no-privacy-tiers permission
+  model as `household_contacts`/`household_polls`. See "Household meal
+  planning" in `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.
