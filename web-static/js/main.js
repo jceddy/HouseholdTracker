@@ -8,6 +8,11 @@
     // Previous/Next buttons.
     let currentCalendarRangeStart = null;
     let editingCalendarEventId = null;
+    // Same "which week, and are we editing" idea as the Calendar tab's own
+    // state, one week at a time via the Meal Plan tab's own Previous/Next
+    // buttons.
+    let currentMealPlanRangeStart = null;
+    let editingMealPlanId = null;
 
     const user = await getCurrentUser();
     if (!user) {
@@ -308,6 +313,10 @@
         // and its "which week" position.
         currentCalendarRangeStart = startOfWeek(new Date());
         cancelCalendarEventEdit();
+        // Same reset idea, for the meal plan tab's own edit-in-progress
+        // state and its "which week" position.
+        currentMealPlanRangeStart = startOfWeek(new Date());
+        cancelMealPlanEdit();
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadContacts(householdId);
@@ -320,6 +329,7 @@
         await loadCalendar(householdId);
         await loadMeetings(householdId);
         await loadPolls(householdId);
+        await loadMealPlans(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -1843,6 +1853,114 @@
         document.getElementById('household-calendar-cancel-button').hidden = false;
     }
 
+    // Household meal planning (issue #25). Same "no privacy tiers, any
+    // member can add/edit/remove" permission model as pets/contacts/the
+    // shopping list -- a meal plan is shared household coordination
+    // information. No structured recipe storage for v1 -- ingredients is
+    // a single freeform field (one per line), and the shopping-list
+    // tie-in (below) is a manual per-entry action, not automatic.
+
+    // formatDateOnly(...) - the meal plan API sends/expects plain
+    // 'YYYY-MM-DD' (a DATE column, not a DATETIME -- see migration 0038),
+    // so unlike formatDateTimeLocal()/fromMysqlDateTime(), there's no
+    // time-of-day component to round-trip at all.
+    function formatDateOnly(date) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function fromDateOnly(value) {
+        return new Date(value + 'T00:00:00');
+    }
+
+    const MEAL_TYPE_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' };
+
+    function formatMealPlanLabel(mealPlan) {
+        const date = fromDateOnly(mealPlan.planned_date);
+        const dateOpts = { weekday: 'short', month: 'short', day: 'numeric' };
+        const mealTypeLabel = MEAL_TYPE_LABELS[mealPlan.meal_type] || mealPlan.meal_type;
+        return `${date.toLocaleDateString(undefined, dateOpts)} — ${mealTypeLabel}: ${mealPlan.title}`;
+    }
+
+    function cancelMealPlanEdit() {
+        editingMealPlanId = null;
+        const form = document.getElementById('household-meal-plan-form');
+        if (form) {
+            form.reset();
+        }
+        document.getElementById('household-meal-plan-submit-button').textContent = 'Add meal';
+        document.getElementById('household-meal-plan-cancel-button').hidden = true;
+    }
+
+    function startMealPlanEdit(mealPlan) {
+        editingMealPlanId = mealPlan.id;
+        document.getElementById('household-meal-plan-date').value = mealPlan.planned_date;
+        document.getElementById('household-meal-plan-meal-type').value = mealPlan.meal_type;
+        document.getElementById('household-meal-plan-title').value = mealPlan.title;
+        document.getElementById('household-meal-plan-ingredients').value = mealPlan.ingredients || '';
+        document.getElementById('household-meal-plan-notes').value = mealPlan.notes || '';
+        document.getElementById('household-meal-plan-submit-button').textContent = 'Save';
+        document.getElementById('household-meal-plan-cancel-button').hidden = false;
+    }
+
+    async function loadMealPlans(householdId) {
+        const from = currentMealPlanRangeStart;
+        const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 6);
+        document.getElementById('household-meal-plan-range-label').textContent =
+            `${from.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} - `
+            + `${to.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+
+        const { response, body } = await apiRequest(
+            `/households/meal-plans?household_id=${householdId}&from=${formatDateOnly(from)}&to=${formatDateOnly(to)}`
+        );
+        const list = document.getElementById('household-meal-plan-list');
+        list.innerHTML = '';
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.meal_plans.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Nothing planned this week.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const mealPlan of body.meal_plans) {
+            const { li, actions } = buildListItem(formatMealPlanLabel(mealPlan));
+            if (mealPlan.ingredients) {
+                actions.appendChild(buildButton('Add ingredients to shopping list', async () => {
+                    const { response, body } = await apiRequest('/households/meal-plans/add-to-shopping-list', {
+                        method: 'POST',
+                        body: JSON.stringify({ meal_plan_id: mealPlan.id }),
+                    });
+                    await loadShoppingList(householdId);
+
+                    const messageEl = document.getElementById('household-meal-plan-message');
+                    if (!response.ok) {
+                        messageEl.textContent = (body && body.message) || 'Could not add ingredients to the shopping list.';
+                        messageEl.className = 'message message--error';
+                    } else {
+                        messageEl.textContent = `Added ${body.items.length} item(s) to the shopping list.`
+                            + (body.skipped > 0 ? ` (${body.skipped} already on the list.)` : '');
+                        messageEl.className = 'message';
+                    }
+                    messageEl.hidden = false;
+                }));
+            }
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => startMealPlanEdit(mealPlan)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/meal-plans/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ meal_plan_id: mealPlan.id }),
+                });
+                await loadMealPlans(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // Household meetings (issue #8). Same "no privacy tiers, any member
     // can add/edit/remove" permission model as pets/contacts -- a meeting
     // log is shared household information. A meeting's own action-item
@@ -2609,9 +2727,12 @@
 
         await loadStaples(currentHouseholdId);
         await loadShoppingList(currentHouseholdId);
-        messageEl.textContent = body.items.length === 0
-            ? 'No staples were flagged as needing restock.'
-            : `Added ${body.items.length} item(s) to the shopping list.`;
+        if (body.items.length === 0 && body.skipped === 0) {
+            messageEl.textContent = 'No staples were flagged as needing restock.';
+        } else {
+            messageEl.textContent = `Added ${body.items.length} item(s) to the shopping list.`
+                + (body.skipped > 0 ? ` (${body.skipped} already on the list.)` : '');
+        }
         messageEl.className = 'message';
         messageEl.hidden = false;
     });
@@ -2667,6 +2788,58 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save event.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-meal-plan-prev').addEventListener('click', async () => {
+        currentMealPlanRangeStart.setDate(currentMealPlanRangeStart.getDate() - 7);
+        await loadMealPlans(currentHouseholdId);
+    });
+
+    document.getElementById('household-meal-plan-next').addEventListener('click', async () => {
+        currentMealPlanRangeStart.setDate(currentMealPlanRangeStart.getDate() + 7);
+        await loadMealPlans(currentHouseholdId);
+    });
+
+    document.getElementById('household-meal-plan-cancel-button').addEventListener('click', () => {
+        cancelMealPlanEdit();
+    });
+
+    document.getElementById('household-meal-plan-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-meal-plan-message');
+        messageEl.hidden = true;
+
+        const payload = {
+            planned_date: form.planned_date.value,
+            meal_type: form.meal_type.value,
+            title: form.title.value,
+            ingredients: form.ingredients.value,
+            notes: form.notes.value,
+        };
+
+        const isEdit = editingMealPlanId !== null;
+        const { response, body } = await apiRequest(
+            isEdit ? '/households/meal-plans/update' : '/households/meal-plans',
+            {
+                method: 'POST',
+                body: JSON.stringify(
+                    isEdit
+                        ? { meal_plan_id: editingMealPlanId, ...payload }
+                        : { household_id: currentHouseholdId, ...payload }
+                ),
+            }
+        );
+
+        if (response.ok) {
+            cancelMealPlanEdit();
+            await loadMealPlans(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not save meal plan.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });

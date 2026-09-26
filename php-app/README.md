@@ -41,7 +41,8 @@ database.
     plus its exceptions; `TaskService`/`RecurrenceCalculator`
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11); `HouseholdMeetingService` (meetings —
-    issue #8); `HouseholdPollService` (household polls — issue #27).
+    issue #8); `HouseholdPollService` (household polls — issue #27);
+    `HouseholdMealPlanService` (meal planning — issue #25).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -122,7 +123,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/staples/flag` | `{"item_id"}`                                     | Requires auth. `404` if no such staple; `403` if the caller isn't a member of its household. Any member may flag any staple — a shared household resource, same as pets/the shopping list. Returns `{"item"}`. |
 | POST   | `/households/staples/unflag` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. Clears `needs_restock`/`flagged_by_user_id`/`flagged_at`. Returns `{"item"}`. |
 | POST   | `/households/staples/delete` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. |
-| POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household and clears their flags. Returns `{"items": [...]}` (the newly-created shopping items, possibly empty). |
+| POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household (skipping any whose name already matches an unpurchased shopping-list item) and clears their flags. Returns `{"items": [...], "skipped"}` (the newly-created shopping items, possibly empty; `skipped` is the count of flagged staples that already matched an existing item). |
 | GET    | `/households/calendar`    | query params `household_id`, `from`, `to`           | Requires auth; `403` if the caller isn't a member. `from`/`to` are any `strtotime()`-parseable bound (`400` if either fails to parse) — every event overlapping that range. No single-event-by-id GET route exists at all; this list endpoint (with its own server-side redaction — see "Household calendar" below) is the only read path. Returns `{"events": [...]}`, each either a full row (`{"id","household_id","created_by_user_id","created_by_username","title","description","starts_at","ends_at","location","responsible_user_id","responsible_username","visibility","created_at","updated_at"}`) or, for a `busy` event of another member's, a redacted `{"id","household_id","starts_at","ends_at","visibility"}` with no other keys present. |
 | POST   | `/households/calendar`    | `{"household_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility": "private"\|"busy"\|"public"}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `description`/`location`: ≤2000/≤255 chars; `starts_at`/`ends_at`: any `strtotime()`-parseable value, normalized to `Y-m-d H:i:s`, `400` if either fails to parse or `ends_at` isn't after `starts_at`; `responsible_user_id`, if given, must be a member of the household. `400` on any validation failure. Returns `{"event"}` (unredacted, the caller's own). |
 | POST   | `/households/calendar/update` | `{"event_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility"}` | Requires auth. `404` if no such event; `403` if the caller isn't a member of its household, or is but didn't create the event — only the creator may edit it, same as notes. Same validation as create. Returns `{"event"}`. |
@@ -153,6 +154,11 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/polls/vote` | `{"poll_id", "option_ids": [int]}`                  | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household; `409` if the poll is closed or past its `closes_at`. `option_ids` becomes the caller's *entire* vote set for this poll, wholesale-replacing whatever they'd voted for before (an empty array clears their vote) — see "Household polls" below. `400` if `option_ids` has more than one entry on a poll with `allow_multiple_selections = false`, or if any id doesn't belong to this poll. Returns `{"poll"}`. |
 | POST   | `/households/polls/close` | `{"poll_id"}`                                       | Requires auth. `404` if no such poll; `403` if the caller isn't a member of its household. Any member may close it — see "Household polls" below. Returns `{"poll"}`. |
 | POST   | `/households/polls/delete` | `{"poll_id"}`                                      | Requires auth. Same `404`/`403` rules as `/households/polls/close`. |
+| GET    | `/households/meal-plans`  | query params `household_id`, `from`, `to`           | Requires auth; `403` if the caller isn't a member. `from`/`to` are each `YYYY-MM-DD` (`400` if either fails to parse, or if `to` is before `from`) — every meal plan entry with `planned_date` in that inclusive range, ordered by date then meal type (breakfast/lunch/dinner/snack). Returns `{"meal_plans": [{"id","household_id","planned_date","meal_type","title","ingredients","notes","created_by_user_id","created_at","updated_at"}, ...]}`. |
+| POST   | `/households/meal-plans`  | `{"household_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `planned_date`: `YYYY-MM-DD` (`400` otherwise); `meal_type`: one of `"breakfast"`\|`"lunch"`\|`"dinner"`\|`"snack"` (`400` otherwise); `title`: 1-150 chars; `ingredients` (freeform, one per line — see "Household meal planning" below) and `notes`: ≤2000 chars each. `400` on any other validation failure. Returns `{"meal_plan"}`. |
+| POST   | `/households/meal-plans/update` | `{"meal_plan_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth. `404` if no such meal plan; `403` if the caller isn't a member of its household. Any member may update it — see "Household meal planning" below. Same validation as create. Returns `{"meal_plan"}`. |
+| POST   | `/households/meal-plans/delete` | `{"meal_plan_id"}`                            | Requires auth. Same `404`/`403` rules as update. |
+| POST   | `/households/meal-plans/add-to-shopping-list` | `{"meal_plan_id"}`              | Requires auth. Same `404`/`403` rules as update. Splits the meal plan's `ingredients` field into one shopping-list item per non-blank line (via the same `HouseholdShoppingItemRepository::create()` every other shopping-list-adding route uses), skipping any line whose name already matches an unpurchased shopping-list item — see "Household meal planning" below. Returns `{"items": [...], "skipped"}` (`items` possibly empty, if `ingredients` is blank/unset or every line was skipped as a duplicate). Safe to call more than once; nothing is cleared or consumed. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -501,6 +507,14 @@ a matching `household_shopping_items` row for each (via
 `createShoppingItem()` above uses), and clears their flags so they aren't
 copied over again next time. Checking the pantry and flagging what's low,
 then clicking this once, is the whole intended workflow.
+
+**Duplicate detection** — a flagged staple is skipped (no new row created)
+when its name already matches an unpurchased shopping-list item, via
+`HouseholdShoppingItemRepository::normalizeName()` (trimmed,
+case-insensitive; no fuzzy/stemming match against a catalog, since there
+isn't one). The staple's flag is still cleared either way — the need is
+already covered by the existing row. The response's `skipped` count tells
+the caller how many were skipped this way.
 
 ## Household calendar
 
@@ -977,6 +991,43 @@ computes the same thing for display, the same `isTaskOverdue()`-style
 app) rather than needing a cron job to flip a row once the deadline
 passes. `POST /households/polls/close` closes a poll manually regardless
 of `closes_at`.
+
+## Household meal planning
+
+Plan meals for the week ahead (issue #25, `household_meal_plans`), tied
+into the shopping list (issue #24) for ingredients. Same "no privacy
+tiers, any member can add/edit/remove" permission model as pets/contacts/
+the shopping list/meetings/polls — a meal plan is shared household
+coordination information.
+
+**No structured recipe storage for v1** — a meal plan entry has a plain
+`title` plus a freeform `ingredients` field (one ingredient per line,
+`TEXT`, like every other freeform column in this schema), not a separate
+ingredients-list-with-quantities/instructions model. This settles the
+issue's own "full recipe storage vs. just naming" open question in favor
+of the simpler v1.
+
+**The shopping-list tie-in is a manual, per-entry action, not
+automatic** — `POST /households/meal-plans/add-to-shopping-list` splits
+that one entry's `ingredients` field into one shopping-list item per
+non-blank line (`HouseholdMealPlanService::addIngredientsToShoppingList()`),
+the same shape (**including duplicate detection**, skipping a line whose
+name already matches an unpurchased shopping-list item — see "Household
+shopping list" above) `HouseholdService::addNeedingRestockStaplesToShoppingList()`
+already uses for staples. Unlike staples, there's nothing to clear
+afterward — a meal plan is a standing record, not a one-shot checklist —
+so the action is safe to repeat (e.g. after removing some items back off
+the shopping list) rather than being a one-time consume.
+
+**No relationship to issue #10's fitness/nutrition tracking** is wired up
+— kept fully independent for v1, per the issue's own third open question.
+
+`planned_date` is a plain `DATE` (no time-of-day — a meal plan entry is
+"which day", not "what time"), validated the same strict
+`DateTime::createFromFormat('Y-m-d', ...)` round-trip check `due_at`
+already uses, not the lenient `strtotime()` parsing calendar events/
+meetings use. `meal_type` is a genuinely closed set (`ENUM`), unlike the
+freeform category/label text columns elsewhere in this schema.
 
 ## LLM usage (Fireworks AI)
 

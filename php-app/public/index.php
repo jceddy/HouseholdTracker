@@ -25,10 +25,12 @@ use HouseholdTracker\Household\CalendarEventNotFoundException;
 use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\ContactNotFoundException;
 use HouseholdTracker\Household\HomeImprovementService;
+use HouseholdTracker\Household\HouseholdMealPlanService;
 use HouseholdTracker\Household\HouseholdMeetingService;
 use HouseholdTracker\Household\HouseholdPollService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InviteNotFoundException;
+use HouseholdTracker\Household\MealPlanNotFoundException;
 use HouseholdTracker\Household\MeetingNotFoundException;
 use HouseholdTracker\Household\NoteNotFoundException;
 use HouseholdTracker\Household\NotAHouseholdMemberException;
@@ -52,6 +54,7 @@ use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
 use HouseholdTracker\Repository\HouseholdContactRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
+use HouseholdTracker\Repository\HouseholdMealPlanRepository;
 use HouseholdTracker\Repository\HouseholdMeetingRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
@@ -354,6 +357,12 @@ $meetingService = new HouseholdMeetingService(
 $pollService = new HouseholdPollService(
     new HouseholdMemberRepository(),
     new HouseholdPollRepository()
+);
+
+$mealPlanService = new HouseholdMealPlanService(
+    new HouseholdMemberRepository(),
+    new HouseholdMealPlanRepository(),
+    new HouseholdShoppingItemRepository()
 );
 
 $accountExport = new AccountExportService(
@@ -1296,11 +1305,11 @@ if ($path === '/households/staples/add-to-shopping-list' && $method === 'POST') 
     $body = requestBody();
 
     try {
-        $items = $households->addNeedingRestockStaplesToShoppingList(
+        $result = $households->addNeedingRestockStaplesToShoppingList(
             (int) $currentUser['id'],
             (int) ($body['household_id'] ?? 0)
         );
-        respond(200, ['status' => 'ok', 'items' => $items]);
+        respond(200, ['status' => 'ok', 'items' => $result['items'], 'skipped' => $result['skipped']]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -1727,6 +1736,102 @@ if ($path === '/households/polls/delete' && $method === 'POST') {
         $pollService->deletePoll((int) $currentUser['id'], (int) ($body['poll_id'] ?? 0));
         respond(200, ['status' => 'ok']);
     } catch (PollNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meal-plans' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        $mealPlans = $mealPlanService->listMealPlans(
+            (int) $currentUser['id'],
+            $householdId,
+            (string) ($_GET['from'] ?? ''),
+            (string) ($_GET['to'] ?? '')
+        );
+        respond(200, ['status' => 'ok', 'meal_plans' => $mealPlans]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meal-plans' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $mealPlan = $mealPlanService->createMealPlan(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['planned_date'] ?? ''),
+            (string) ($body['meal_type'] ?? ''),
+            (string) ($body['title'] ?? ''),
+            isset($body['ingredients']) ? (string) $body['ingredients'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(201, ['status' => 'ok', 'meal_plan' => $mealPlan]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meal-plans/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $mealPlan = $mealPlanService->updateMealPlan(
+            (int) $currentUser['id'],
+            (int) ($body['meal_plan_id'] ?? 0),
+            (string) ($body['planned_date'] ?? ''),
+            (string) ($body['meal_type'] ?? ''),
+            (string) ($body['title'] ?? ''),
+            isset($body['ingredients']) ? (string) $body['ingredients'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null
+        );
+        respond(200, ['status' => 'ok', 'meal_plan' => $mealPlan]);
+    } catch (MealPlanNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meal-plans/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $mealPlanService->deleteMealPlan((int) $currentUser['id'], (int) ($body['meal_plan_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (MealPlanNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/meal-plans/add-to-shopping-list' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $result = $mealPlanService->addIngredientsToShoppingList(
+            (int) $currentUser['id'],
+            (int) ($body['meal_plan_id'] ?? 0)
+        );
+        respond(200, ['status' => 'ok', 'items' => $result['items'], 'skipped' => $result['skipped']]);
+    } catch (MealPlanNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
