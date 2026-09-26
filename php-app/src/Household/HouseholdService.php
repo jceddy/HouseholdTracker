@@ -566,25 +566,41 @@ final class HouseholdService
      * addNeedingRestockStaplesToShoppingList(...) - the actual point of the
      * staples checklist: turn every currently-flagged staple into a real
      * shopping-list item (issue #66), then clear its flag so it doesn't get
-     * copied over again next time. Returns the newly-created shopping items.
+     * copied over again next time. Returns ['items' => newly-created rows,
+     * 'skipped' => count skipped because a matching name was already on the
+     * list (unpurchased) -- see HouseholdShoppingItemRepository::normalizeName().
+     * A skipped staple still gets its flag cleared: the need is already
+     * covered by the existing shopping-list row.
      */
     public function addNeedingRestockStaplesToShoppingList(int $callerId, int $householdId): array
     {
         $this->requireMember($householdId, $callerId);
 
+        $existingNames = [];
+        foreach ($this->shoppingItems->listNeeded($householdId) as $item) {
+            $existingNames[HouseholdShoppingItemRepository::normalizeName((string) $item['name'])] = true;
+        }
+
         $created = [];
+        $skipped = 0;
         foreach ($this->staples->listNeedingRestock($householdId) as $staple) {
-            $created[] = $this->shoppingItems->create(
-                $householdId,
-                $callerId,
-                (string) $staple['name'],
-                null,
-                $staple['category'] !== null ? (string) $staple['category'] : null
-            );
+            $normalized = HouseholdShoppingItemRepository::normalizeName((string) $staple['name']);
+            if (isset($existingNames[$normalized])) {
+                $skipped++;
+            } else {
+                $created[] = $this->shoppingItems->create(
+                    $householdId,
+                    $callerId,
+                    (string) $staple['name'],
+                    null,
+                    $staple['category'] !== null ? (string) $staple['category'] : null
+                );
+                $existingNames[$normalized] = true;
+            }
             $this->staples->unflagNeedsRestock((int) $staple['id']);
         }
 
-        return $created;
+        return ['items' => $created, 'skipped' => $skipped];
     }
 
     private function requireMemberForStaple(int $callerId, int $itemId): array

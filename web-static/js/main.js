@@ -1931,11 +1931,22 @@
             const { li, actions } = buildListItem(formatMealPlanLabel(mealPlan));
             if (mealPlan.ingredients) {
                 actions.appendChild(buildButton('Add ingredients to shopping list', async () => {
-                    await apiRequest('/households/meal-plans/add-to-shopping-list', {
+                    const { response, body } = await apiRequest('/households/meal-plans/add-to-shopping-list', {
                         method: 'POST',
                         body: JSON.stringify({ meal_plan_id: mealPlan.id }),
                     });
                     await loadShoppingList(householdId);
+
+                    const messageEl = document.getElementById('household-meal-plan-message');
+                    if (!response.ok) {
+                        messageEl.textContent = (body && body.message) || 'Could not add ingredients to the shopping list.';
+                        messageEl.className = 'message message--error';
+                    } else {
+                        messageEl.textContent = `Added ${body.items.length} item(s) to the shopping list.`
+                            + (body.skipped > 0 ? ` (${body.skipped} already on the list.)` : '');
+                        messageEl.className = 'message';
+                    }
+                    messageEl.hidden = false;
                 }));
             }
             actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => startMealPlanEdit(mealPlan)));
@@ -2716,9 +2727,12 @@
 
         await loadStaples(currentHouseholdId);
         await loadShoppingList(currentHouseholdId);
-        messageEl.textContent = body.items.length === 0
-            ? 'No staples were flagged as needing restock.'
-            : `Added ${body.items.length} item(s) to the shopping list.`;
+        if (body.items.length === 0 && body.skipped === 0) {
+            messageEl.textContent = 'No staples were flagged as needing restock.';
+        } else {
+            messageEl.textContent = `Added ${body.items.length} item(s) to the shopping list.`
+                + (body.skipped > 0 ? ` (${body.skipped} already on the list.)` : '');
+        }
         messageEl.className = 'message';
         messageEl.hidden = false;
     });

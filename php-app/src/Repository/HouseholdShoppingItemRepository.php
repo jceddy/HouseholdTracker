@@ -8,6 +8,19 @@ use HouseholdTracker\Database\Connection;
 
 final class HouseholdShoppingItemRepository
 {
+    /**
+     * normalizeName(...) - the matching rule the "add to shopping list"
+     * bulk actions (staples, meal plan ingredients) use to decide an item
+     * is "already on the list": trimmed, case-insensitive equality. No
+     * fuzzy/stemming matching -- "Tomato" vs "tomatoes" is still treated
+     * as different items, since there's no shared ingredient catalog (yet)
+     * to normalize against.
+     */
+    public static function normalizeName(string $name): string
+    {
+        return strtolower(trim($name));
+    }
+
     public function create(
         int $householdId,
         int $addedByUserId,
