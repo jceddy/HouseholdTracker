@@ -101,20 +101,35 @@ final class HouseholdMealPlanService
      * ingredients field into one shopping-list item per non-blank line,
      * the same "one row per staple" shape
      * HouseholdService::addNeedingRestockStaplesToShoppingList() already
-     * uses. Unlike staples, there's no flag to clear afterward -- a meal
-     * plan is a standing record, not a one-shot checklist, so re-running
-     * this is a deliberate no-op-safe action a caller can repeat (e.g.
-     * after clearing some items back off the shopping list).
+     * uses -- including its duplicate detection, so re-running this after
+     * adding some ingredients (or after they were already on the list from
+     * another meal plan) only adds the lines that aren't there yet. Unlike
+     * staples, there's no flag to clear afterward -- a meal plan is a
+     * standing record, not a one-shot checklist, so re-running this is a
+     * deliberate no-op-safe action a caller can repeat (e.g. after clearing
+     * some items back off the shopping list). Returns ['items' =>
+     * newly-created rows, 'skipped' => count skipped as already on the list].
      */
     public function addIngredientsToShoppingList(int $callerId, int $mealPlanId): array
     {
         $mealPlan = $this->requireMealPlan($mealPlanId);
         $this->requireMember((int) $mealPlan['household_id'], $callerId);
 
+        $existingNames = [];
+        foreach ($this->shoppingItems->listNeeded((int) $mealPlan['household_id']) as $item) {
+            $existingNames[HouseholdShoppingItemRepository::normalizeName((string) $item['name'])] = true;
+        }
+
         $created = [];
+        $skipped = 0;
         foreach (preg_split('/\r\n|\r|\n/', (string) $mealPlan['ingredients']) as $line) {
             $line = trim($line);
             if ($line === '') {
+                continue;
+            }
+            $normalized = HouseholdShoppingItemRepository::normalizeName($line);
+            if (isset($existingNames[$normalized])) {
+                $skipped++;
                 continue;
             }
             $created[] = $this->shoppingItems->create(
@@ -124,9 +139,10 @@ final class HouseholdMealPlanService
                 null,
                 null
             );
+            $existingNames[$normalized] = true;
         }
 
-        return $created;
+        return ['items' => $created, 'skipped' => $skipped];
     }
 
     private function requireMealPlan(int $mealPlanId): array

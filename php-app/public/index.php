@@ -1305,11 +1305,11 @@ if ($path === '/households/staples/add-to-shopping-list' && $method === 'POST') 
     $body = requestBody();
 
     try {
-        $items = $households->addNeedingRestockStaplesToShoppingList(
+        $result = $households->addNeedingRestockStaplesToShoppingList(
             (int) $currentUser['id'],
             (int) ($body['household_id'] ?? 0)
         );
-        respond(200, ['status' => 'ok', 'items' => $items]);
+        respond(200, ['status' => 'ok', 'items' => $result['items'], 'skipped' => $result['skipped']]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -1826,11 +1826,11 @@ if ($path === '/households/meal-plans/add-to-shopping-list' && $method === 'POST
     $body = requestBody();
 
     try {
-        $items = $mealPlanService->addIngredientsToShoppingList(
+        $result = $mealPlanService->addIngredientsToShoppingList(
             (int) $currentUser['id'],
             (int) ($body['meal_plan_id'] ?? 0)
         );
-        respond(200, ['status' => 'ok', 'items' => $items]);
+        respond(200, ['status' => 'ok', 'items' => $result['items'], 'skipped' => $result['skipped']]);
     } catch (MealPlanNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAHouseholdMemberException $e) {

@@ -123,7 +123,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/staples/flag` | `{"item_id"}`                                     | Requires auth. `404` if no such staple; `403` if the caller isn't a member of its household. Any member may flag any staple — a shared household resource, same as pets/the shopping list. Returns `{"item"}`. |
 | POST   | `/households/staples/unflag` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. Clears `needs_restock`/`flagged_by_user_id`/`flagged_at`. Returns `{"item"}`. |
 | POST   | `/households/staples/delete` | `{"item_id"}`                                    | Requires auth. Same `404`/`403` rules as `/flag`. |
-| POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household and clears their flags. Returns `{"items": [...]}` (the newly-created shopping items, possibly empty). |
+| POST   | `/households/staples/add-to-shopping-list` | `{"household_id"}`                | Requires auth; `403` if the caller isn't a member. Creates a shopping-list item for every currently-flagged staple in the household (skipping any whose name already matches an unpurchased shopping-list item) and clears their flags. Returns `{"items": [...], "skipped"}` (the newly-created shopping items, possibly empty; `skipped` is the count of flagged staples that already matched an existing item). |
 | GET    | `/households/calendar`    | query params `household_id`, `from`, `to`           | Requires auth; `403` if the caller isn't a member. `from`/`to` are any `strtotime()`-parseable bound (`400` if either fails to parse) — every event overlapping that range. No single-event-by-id GET route exists at all; this list endpoint (with its own server-side redaction — see "Household calendar" below) is the only read path. Returns `{"events": [...]}`, each either a full row (`{"id","household_id","created_by_user_id","created_by_username","title","description","starts_at","ends_at","location","responsible_user_id","responsible_username","visibility","created_at","updated_at"}`) or, for a `busy` event of another member's, a redacted `{"id","household_id","starts_at","ends_at","visibility"}` with no other keys present. |
 | POST   | `/households/calendar`    | `{"household_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility": "private"\|"busy"\|"public"}` | Requires auth; `403` if the caller isn't a member. `title`: 1-150 chars; `description`/`location`: ≤2000/≤255 chars; `starts_at`/`ends_at`: any `strtotime()`-parseable value, normalized to `Y-m-d H:i:s`, `400` if either fails to parse or `ends_at` isn't after `starts_at`; `responsible_user_id`, if given, must be a member of the household. `400` on any validation failure. Returns `{"event"}` (unredacted, the caller's own). |
 | POST   | `/households/calendar/update` | `{"event_id", "title", "description"?, "starts_at", "ends_at", "location"?, "responsible_user_id"?, "visibility"}` | Requires auth. `404` if no such event; `403` if the caller isn't a member of its household, or is but didn't create the event — only the creator may edit it, same as notes. Same validation as create. Returns `{"event"}`. |
@@ -158,7 +158,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/meal-plans`  | `{"household_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth; `403` if the caller isn't a member. `planned_date`: `YYYY-MM-DD` (`400` otherwise); `meal_type`: one of `"breakfast"`\|`"lunch"`\|`"dinner"`\|`"snack"` (`400` otherwise); `title`: 1-150 chars; `ingredients` (freeform, one per line — see "Household meal planning" below) and `notes`: ≤2000 chars each. `400` on any other validation failure. Returns `{"meal_plan"}`. |
 | POST   | `/households/meal-plans/update` | `{"meal_plan_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth. `404` if no such meal plan; `403` if the caller isn't a member of its household. Any member may update it — see "Household meal planning" below. Same validation as create. Returns `{"meal_plan"}`. |
 | POST   | `/households/meal-plans/delete` | `{"meal_plan_id"}`                            | Requires auth. Same `404`/`403` rules as update. |
-| POST   | `/households/meal-plans/add-to-shopping-list` | `{"meal_plan_id"}`              | Requires auth. Same `404`/`403` rules as update. Splits the meal plan's `ingredients` field into one shopping-list item per non-blank line (via the same `HouseholdShoppingItemRepository::create()` every other shopping-list-adding route uses) — see "Household meal planning" below. Returns `{"items": [...]}` (possibly empty, if `ingredients` is blank or unset). Safe to call more than once; nothing is cleared or consumed. |
+| POST   | `/households/meal-plans/add-to-shopping-list` | `{"meal_plan_id"}`              | Requires auth. Same `404`/`403` rules as update. Splits the meal plan's `ingredients` field into one shopping-list item per non-blank line (via the same `HouseholdShoppingItemRepository::create()` every other shopping-list-adding route uses), skipping any line whose name already matches an unpurchased shopping-list item — see "Household meal planning" below. Returns `{"items": [...], "skipped"}` (`items` possibly empty, if `ingredients` is blank/unset or every line was skipped as a duplicate). Safe to call more than once; nothing is cleared or consumed. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -507,6 +507,14 @@ a matching `household_shopping_items` row for each (via
 `createShoppingItem()` above uses), and clears their flags so they aren't
 copied over again next time. Checking the pantry and flagging what's low,
 then clicking this once, is the whole intended workflow.
+
+**Duplicate detection** — a flagged staple is skipped (no new row created)
+when its name already matches an unpurchased shopping-list item, via
+`HouseholdShoppingItemRepository::normalizeName()` (trimmed,
+case-insensitive; no fuzzy/stemming match against a catalog, since there
+isn't one). The staple's flag is still cleared either way — the need is
+already covered by the existing row. The response's `skipped` count tells
+the caller how many were skipped this way.
 
 ## Household calendar
 
@@ -1003,7 +1011,9 @@ of the simpler v1.
 automatic** — `POST /households/meal-plans/add-to-shopping-list` splits
 that one entry's `ingredients` field into one shopping-list item per
 non-blank line (`HouseholdMealPlanService::addIngredientsToShoppingList()`),
-the same shape `HouseholdService::addNeedingRestockStaplesToShoppingList()`
+the same shape (**including duplicate detection**, skipping a line whose
+name already matches an unpurchased shopping-list item — see "Household
+shopping list" above) `HouseholdService::addNeedingRestockStaplesToShoppingList()`
 already uses for staples. Unlike staples, there's nothing to clear
 afterward — a meal plan is a standing record, not a one-shot checklist —
 so the action is safe to repeat (e.g. after removing some items back off
