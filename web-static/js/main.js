@@ -13,6 +13,7 @@
     // buttons.
     let currentMealPlanRangeStart = null;
     let editingMealPlanId = null;
+    let editingInventoryItemId = null;
 
     const user = await getCurrentUser();
     if (!user) {
@@ -317,6 +318,8 @@
         // state and its "which week" position.
         currentMealPlanRangeStart = startOfWeek(new Date());
         cancelMealPlanEdit();
+        // Same reset idea, for the inventory tab's own edit-in-progress state.
+        cancelInventoryEdit();
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadContacts(householdId);
@@ -330,6 +333,7 @@
         await loadMeetings(householdId);
         await loadPolls(householdId);
         await loadMealPlans(householdId);
+        await loadInventory(householdId);
     }
 
     function closeHouseholdDetail() {
@@ -640,6 +644,7 @@
 
         currentContacts = body.contacts;
         populateVetSelect(document.getElementById('household-pet-vet-contact'));
+        populateVetSelect(document.getElementById('household-inventory-service-contact'));
 
         for (const contact of body.contacts) {
             const { li, actions } = buildListItem(buildContactLabelElement(contact));
@@ -1961,6 +1966,88 @@
         }
     }
 
+    // Household inventory/asset tracking (issue #23). Same "no privacy
+    // tiers, any member can add/edit/remove" permission model as pets/
+    // contacts/staples -- a shared household resource. Uses the same
+    // single toggling create/edit form pattern as the meal plan tab
+    // (cancelInventoryEdit()/startInventoryEdit() mirror cancelMealPlanEdit()/
+    // startMealPlanEdit()) rather than pets/contacts' older inline-edit-
+    // per-row pattern, given how many fields an item has.
+    function formatInventoryLabel(item) {
+        const details = [];
+        if (item.category) {
+            details.push(item.category);
+        }
+        if (item.location) {
+            details.push(item.location);
+        }
+        if (item.warranty_expires_at) {
+            details.push(`Warranty until ${fromDateOnly(item.warranty_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`);
+        }
+        const serviceContact = currentContacts.find((contact) => contact.id === item.service_contact_id);
+        if (serviceContact) {
+            details.push(`Service: ${serviceContact.name}`);
+        }
+        return details.length > 0 ? `${item.name} (${details.join(', ')})` : item.name;
+    }
+
+    function cancelInventoryEdit() {
+        editingInventoryItemId = null;
+        const form = document.getElementById('household-inventory-form');
+        if (form) {
+            form.reset();
+        }
+        document.getElementById('household-inventory-submit-button').textContent = 'Add item';
+        document.getElementById('household-inventory-cancel-button').hidden = true;
+    }
+
+    function startInventoryEdit(item) {
+        editingInventoryItemId = item.id;
+        document.getElementById('household-inventory-name').value = item.name;
+        document.getElementById('household-inventory-category').value = item.category || '';
+        document.getElementById('household-inventory-purchase-date').value = item.purchase_date || '';
+        document.getElementById('household-inventory-purchase-price').value = item.purchase_price || '';
+        document.getElementById('household-inventory-warranty-expires').value = item.warranty_expires_at || '';
+        document.getElementById('household-inventory-serial-number').value = item.serial_number || '';
+        document.getElementById('household-inventory-location').value = item.location || '';
+        document.getElementById('household-inventory-notes').value = item.notes || '';
+        populateVetSelect(document.getElementById('household-inventory-service-contact'), item.service_contact_id);
+        document.getElementById('household-inventory-submit-button').textContent = 'Save';
+        document.getElementById('household-inventory-cancel-button').hidden = false;
+    }
+
+    async function loadInventory(householdId) {
+        const { response, body } = await apiRequest('/households/inventory?household_id=' + householdId);
+        const list = document.getElementById('household-inventory-list');
+        list.innerHTML = '';
+
+        populateVetSelect(document.getElementById('household-inventory-service-contact'));
+
+        if (!response.ok) {
+            return;
+        }
+
+        if (body.items.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No inventory items yet.';
+            list.appendChild(li);
+            return;
+        }
+
+        for (const item of body.items) {
+            const { li, actions } = buildListItem(formatInventoryLabel(item));
+            actions.appendChild(buildIconButton(EDIT_ICON, 'Edit', () => startInventoryEdit(item)));
+            actions.appendChild(buildIconButton(DELETE_ICON, 'Delete', async () => {
+                await apiRequest('/households/inventory/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ item_id: item.id }),
+                });
+                await loadInventory(householdId);
+            }));
+            list.appendChild(li);
+        }
+    }
+
     // Household meetings (issue #8). Same "no privacy tiers, any member
     // can add/edit/remove" permission model as pets/contacts -- a meeting
     // log is shared household information. A meeting's own action-item
@@ -2840,6 +2927,52 @@
         }
 
         messageEl.textContent = (body && body.message) || 'Could not save meal plan.';
+        messageEl.className = 'message message--error';
+        messageEl.hidden = false;
+    });
+
+    document.getElementById('household-inventory-cancel-button').addEventListener('click', () => {
+        cancelInventoryEdit();
+    });
+
+    document.getElementById('household-inventory-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const messageEl = document.getElementById('household-inventory-message');
+        messageEl.hidden = true;
+
+        const payload = {
+            name: form.name.value,
+            category: form.category.value,
+            purchase_date: form.purchase_date.value,
+            purchase_price: form.purchase_price.value,
+            warranty_expires_at: form.warranty_expires_at.value,
+            serial_number: form.serial_number.value,
+            location: form.location.value,
+            notes: form.notes.value,
+            service_contact_id: form.service_contact_id.value ? Number(form.service_contact_id.value) : null,
+        };
+
+        const isEdit = editingInventoryItemId !== null;
+        const { response, body } = await apiRequest(
+            isEdit ? '/households/inventory/update' : '/households/inventory',
+            {
+                method: 'POST',
+                body: JSON.stringify(
+                    isEdit
+                        ? { item_id: editingInventoryItemId, ...payload }
+                        : { household_id: currentHouseholdId, ...payload }
+                ),
+            }
+        );
+
+        if (response.ok) {
+            cancelInventoryEdit();
+            await loadInventory(currentHouseholdId);
+            return;
+        }
+
+        messageEl.textContent = (body && body.message) || 'Could not save inventory item.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
     });

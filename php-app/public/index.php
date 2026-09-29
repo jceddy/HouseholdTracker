@@ -25,10 +25,12 @@ use HouseholdTracker\Household\CalendarEventNotFoundException;
 use HouseholdTracker\Household\CannotInviteSelfException;
 use HouseholdTracker\Household\ContactNotFoundException;
 use HouseholdTracker\Household\HomeImprovementService;
+use HouseholdTracker\Household\HouseholdInventoryService;
 use HouseholdTracker\Household\HouseholdMealPlanService;
 use HouseholdTracker\Household\HouseholdMeetingService;
 use HouseholdTracker\Household\HouseholdPollService;
 use HouseholdTracker\Household\HouseholdService;
+use HouseholdTracker\Household\InventoryItemNotFoundException;
 use HouseholdTracker\Household\InviteNotFoundException;
 use HouseholdTracker\Household\MealPlanNotFoundException;
 use HouseholdTracker\Household\MeetingNotFoundException;
@@ -53,6 +55,7 @@ use HouseholdTracker\Repository\EmailVerificationRepository;
 use HouseholdTracker\Repository\HomeImprovementProjectRepository;
 use HouseholdTracker\Repository\HouseholdCalendarEventRepository;
 use HouseholdTracker\Repository\HouseholdContactRepository;
+use HouseholdTracker\Repository\HouseholdInventoryRepository;
 use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMealPlanRepository;
 use HouseholdTracker\Repository\HouseholdMeetingRepository;
@@ -363,6 +366,12 @@ $mealPlanService = new HouseholdMealPlanService(
     new HouseholdMemberRepository(),
     new HouseholdMealPlanRepository(),
     new HouseholdShoppingItemRepository()
+);
+
+$inventoryService = new HouseholdInventoryService(
+    new HouseholdMemberRepository(),
+    new HouseholdInventoryRepository(),
+    new HouseholdContactRepository()
 );
 
 $accountExport = new AccountExportService(
@@ -1832,6 +1841,85 @@ if ($path === '/households/meal-plans/add-to-shopping-list' && $method === 'POST
         );
         respond(200, ['status' => 'ok', 'items' => $result['items'], 'skipped' => $result['skipped']]);
     } catch (MealPlanNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/inventory' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'items' => $inventoryService->listItems((int) $currentUser['id'], $householdId)]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/inventory' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $inventoryService->createItem(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['category']) ? (string) $body['category'] : null,
+            isset($body['purchase_date']) ? (string) $body['purchase_date'] : null,
+            isset($body['purchase_price']) ? (string) $body['purchase_price'] : null,
+            isset($body['warranty_expires_at']) ? (string) $body['warranty_expires_at'] : null,
+            isset($body['serial_number']) ? (string) $body['serial_number'] : null,
+            isset($body['location']) ? (string) $body['location'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null,
+            isset($body['service_contact_id']) && $body['service_contact_id'] !== null ? (int) $body['service_contact_id'] : null
+        );
+        respond(201, ['status' => 'ok', 'item' => $item]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/inventory/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $item = $inventoryService->updateItem(
+            (int) $currentUser['id'],
+            (int) ($body['item_id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['category']) ? (string) $body['category'] : null,
+            isset($body['purchase_date']) ? (string) $body['purchase_date'] : null,
+            isset($body['purchase_price']) ? (string) $body['purchase_price'] : null,
+            isset($body['warranty_expires_at']) ? (string) $body['warranty_expires_at'] : null,
+            isset($body['serial_number']) ? (string) $body['serial_number'] : null,
+            isset($body['location']) ? (string) $body['location'] : null,
+            isset($body['notes']) ? (string) $body['notes'] : null,
+            isset($body['service_contact_id']) && $body['service_contact_id'] !== null ? (int) $body['service_contact_id'] : null
+        );
+        respond(200, ['status' => 'ok', 'item' => $item]);
+    } catch (InventoryItemNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/inventory/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $inventoryService->deleteItem((int) $currentUser['id'], (int) ($body['item_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (InventoryItemNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
