@@ -304,9 +304,13 @@ above remains the only way migrations reach the deployed database.
   incremental-poll query the frontend uses instead of a real-time
   transport (no websockets/SSE on this app's Bluehost shared hosting).
   Channel-only for v1, no `recipient_user_id`/DMs, and no update/delete
-  route at all -- a message is permanent once sent. Same no-privacy-tiers
-  permission model as `household_pets`/`household_contacts`/
-  `household_staple_items`. See "Household chat" in `php-app/README.md`.
+  route at all -- a message is permanent once sent, until a daily cron
+  script (`bin/prune_old_messages.php`) deletes anything older than 7
+  days -- age alone is the retention rule, unlike
+  `household_task_instances`' own resolved/pending cleanup pass. Same
+  no-privacy-tiers permission model as `household_pets`/
+  `household_contacts`/`household_staple_items`. See "Household chat" in
+  `php-app/README.md`.
 
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own

@@ -64,6 +64,8 @@ database.
   `../database/migrations/` (see that project's README).
 - `bin/generate_task_instances.php` — Daily-cron task/chore maintenance
   script — see "Task/chore tracking" below.
+- `bin/prune_old_messages.php` — Daily-cron chat retention script — see
+  "Household chat" below.
 - `tests/` — PHPUnit tests.
 
 ## API
@@ -1098,6 +1100,31 @@ household communication.
 **No pagination beyond the initial 200-message page** — the same "fine
 for v1, revisit if it's ever actually a problem" reasoning issue #19
 (the activity log) already names for its own open question about volume.
+Unbounded growth itself is handled instead by the retention cron below,
+rather than by ever needing to page back through old history.
+
+**`bin/prune_old_messages.php`** (run once a day via cron — see "Cron
+setup" below): deletes every message older than `RETENTION_DAYS` (7).
+Unlike `household_task_instances`' own cleanup pass (`bin/
+generate_task_instances.php`), a chat message has no "resolved" state to
+weigh — age alone is the rule, so this is a single unconditional `DELETE
+... WHERE created_at < ...`
+(`HouseholdMessageRepository::deleteOlderThan()`). Idempotent, the same
+as every other cron script here.
+
+### Cron setup
+
+Same setup as `bin/generate_task_instances.php`'s own "Cron setup" above
+— a plain CLI script invoked directly on the box via cPanel's **Cron
+Jobs** page, not part of the deploy workflow:
+
+- **Command**: `php /home/<cpanel-user>/<site-directory>/bin/prune_old_messages.php >> /home/<cpanel-user>/logs/prune-messages.log 2>&1`
+- **Schedule**: once daily (e.g. `0 6 * * *`) is enough given
+  `RETENTION_DAYS` above; running it more often is harmless (idempotent)
+  but pointless.
+- Set this up separately for the dev and production domains, the same
+  one-time-per-environment caveat `bin/generate_task_instances.php`'s own
+  cron entry has.
 
 ## LLM usage (Fireworks AI)
 
