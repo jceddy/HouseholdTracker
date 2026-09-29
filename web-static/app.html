@@ -62,6 +62,7 @@
             <button type="button" class="tab-button" data-tab="meetings" role="tab" aria-selected="false">Meetings</button>
             <button type="button" class="tab-button" data-tab="polls" role="tab" aria-selected="false">Polls</button>
             <button type="button" class="tab-button" data-tab="meal-plans" role="tab" aria-selected="false">Meal Plan</button>
+            <button type="button" class="tab-button" data-tab="inventory" role="tab" aria-selected="false">Inventory</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -499,6 +500,44 @@
                     <button type="button" id="household-meal-plan-cancel-button" class="button--compact" hidden>Cancel</button>
                 </div>
                 <p id="household-meal-plan-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-inventory" role="tabpanel" hidden>
+            <ul id="household-inventory-list"></ul>
+            <form id="household-inventory-form">
+                <label>Name
+                    <input type="text" id="household-inventory-name" name="name" required maxlength="150">
+                </label>
+                <label>Category
+                    <input type="text" id="household-inventory-category" name="category" maxlength="50" placeholder="e.g. Appliance">
+                </label>
+                <label>Purchase date
+                    <input type="date" id="household-inventory-purchase-date" name="purchase_date">
+                </label>
+                <label>Purchase price
+                    <input type="number" id="household-inventory-purchase-price" name="purchase_price" min="0" step="0.01">
+                </label>
+                <label>Warranty expires
+                    <input type="date" id="household-inventory-warranty-expires" name="warranty_expires_at">
+                </label>
+                <label>Serial number
+                    <input type="text" id="household-inventory-serial-number" name="serial_number" maxlength="100">
+                </label>
+                <label>Location
+                    <input type="text" id="household-inventory-location" name="location" maxlength="150">
+                </label>
+                <label>Notes
+                    <textarea id="household-inventory-notes" name="notes" maxlength="2000"></textarea>
+                </label>
+                <label>Service contact
+                    <select id="household-inventory-service-contact" name="service_contact_id"></select>
+                </label>
+                <div class="form-row">
+                    <button type="submit" id="household-inventory-submit-button">Add item</button>
+                    <button type="button" id="household-inventory-cancel-button" class="button--compact" hidden>Cancel</button>
+                </div>
+                <p id="household-inventory-message" class="message" hidden></p>
             </form>
         </div>
 
