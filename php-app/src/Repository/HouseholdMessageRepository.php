@@ -68,4 +68,24 @@ final class HouseholdMessageRepository
 
         return $stmt->fetchAll();
     }
+
+    /**
+     * deleteOlderThan(...) - the daily cron script's whole job
+     * (bin/prune_old_messages.php): unlike household_task_instances'
+     * cleanup (a resolved/expired instance is still worth a retention
+     * window for the "did we already do this" glance-back), a chat
+     * message has no such use once it's old -- age alone is the only
+     * criterion. Returns the number of rows removed, for the script's own
+     * log output.
+     */
+    public function deleteOlderThan(int $days): int
+    {
+        $stmt = Connection::get()->prepare(
+            'DELETE FROM household_messages WHERE created_at < (NOW() - INTERVAL :days DAY)'
+        );
+        $stmt->bindValue('days', $days, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount();
+    }
 }
