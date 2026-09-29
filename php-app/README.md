@@ -43,7 +43,8 @@ database.
     and maintenance — issue #11); `HouseholdMeetingService` (meetings —
     issue #8); `HouseholdPollService` (household polls — issue #27);
     `HouseholdMealPlanService` (meal planning — issue #25);
-    `HouseholdInventoryService` (inventory/asset tracking — issue #23).
+    `HouseholdInventoryService` (inventory/asset tracking — issue #23);
+    `HouseholdMessageService` (household chat — issue #28).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -164,6 +165,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/inventory`   | `{"household_id", "name", "category"?, "purchase_date"?, "purchase_price"?, "warranty_expires_at"?, "serial_number"?, "location"?, "notes"?, "service_contact_id"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category`: ≤50 chars; `purchase_date`/`warranty_expires_at`: `YYYY-MM-DD` if given; `purchase_price`: a non-negative number if given; `serial_number`: ≤100 chars; `location`: ≤150 chars; `notes`: ≤2000 chars; `service_contact_id`, if given, must be a contact (see `/households/contacts` above) in the same household. `400` on any validation failure. Returns `{"item"}`. |
 | POST   | `/households/inventory/update` | `{"item_id", "name", "category"?, "purchase_date"?, "purchase_price"?, "warranty_expires_at"?, "serial_number"?, "location"?, "notes"?, "service_contact_id"?}` | Requires auth. `404` if no such item; `403` if the caller isn't a member of its household. Any member may update it — see "Household inventory" below. Same validation as create. Returns `{"item"}`. |
 | POST   | `/households/inventory/delete` | `{"item_id"}`                                  | Requires auth. Same `404`/`403` rules as update. |
+| GET    | `/households/messages`   | query params `household_id`, `since_id`?           | Requires auth; `403` if the caller isn't a member. Without `since_id`: the most recent 200 messages (oldest first). With `since_id`: every message with `id` greater than it (an incremental poll) — see "Household chat" below. Returns `{"messages": [{"id","household_id","sender_user_id","body","created_at"}, ...]}`. |
+| POST   | `/households/messages`   | `{"household_id", "body"}`                         | Requires auth; `403` if the caller isn't a member. `body`: 1-2000 chars (`400` otherwise). No update/delete route — see "Household chat" below. Returns `{"message"}`. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -1065,6 +1068,36 @@ DELETE SET NULL`) rather than blocked if that contact is later deleted.
 `purchase_date`/`warranty_expires_at` are plain `DATE` columns, validated
 with the same strict `DateTime::createFromFormat('Y-m-d', ...)` round-trip
 check `due_at`/meal plan's `planned_date` already use.
+
+## Household chat
+
+A single household-wide channel (issue #28, `household_messages`) so
+members can talk to each other. Same "no privacy tiers, any member can
+post" permission model as pets/contacts/staples — every member sees every
+message and any member may post.
+
+**No real-time transport (websockets/SSE)** — this deploys to Bluehost
+shared hosting (see the top-level README's "Deployment" section), which
+has no persistent-connection support. The frontend instead polls `GET
+/households/messages` every 4 seconds while (and only while) the Chat tab
+is the visible one, the same constraint MoodSwings-Web's own in-game chat
+already settled on. A poll after the first passes `since_id` (the highest
+message `id` already seen) so it only fetches what's new, rather than
+re-fetching the whole channel every few seconds.
+
+**Channel-only for v1, no direct messages** — settles the issue's own
+"channel only, DMs only, or both" open question in favor of the simpler
+v1; there's no `recipient_user_id` column at all, since adding DMs later
+is a follow-up migration, not a column sitting unused today.
+
+**A message is permanent once sent — no edit or delete route exists at
+all** — settles the issue's own "can a sender edit/delete" open question
+in favor of the simpler, arguably more honest option it names for
+household communication.
+
+**No pagination beyond the initial 200-message page** — the same "fine
+for v1, revisit if it's ever actually a problem" reasoning issue #19
+(the activity log) already names for its own open question about volume.
 
 ## LLM usage (Fireworks AI)
 
