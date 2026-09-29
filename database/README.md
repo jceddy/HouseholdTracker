@@ -285,6 +285,19 @@ above remains the only way migrations reach the deployed database.
   model as `household_contacts`/`household_polls`. See "Household meal
   planning" in `php-app/README.md`.
 
+- **Household inventory/asset tracking** (`0040`, issue #23):
+  `household_inventory_items` (`purchase_date`/`warranty_expires_at`, both
+  plain `DATE`; `purchase_price` a plain `DECIMAL(10,2)`, never summed
+  anywhere -- that kind of rollup belongs to a future finances tracker,
+  not this one; `serial_number`, `location`, freeform `notes`;
+  `service_contact_id`, a single nullable FK into `household_contacts`
+  `ON DELETE SET NULL`, the exact same shape `household_pets.vet_contact_id`
+  (migration 0031) already established). No net-worth rollups and no
+  automatic warranty-expiration reminder for v1 -- a member checks the
+  list manually. Same no-privacy-tiers permission model as
+  `household_pets`/`household_contacts`/`household_staple_items`. See
+  "Household inventory" in `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.

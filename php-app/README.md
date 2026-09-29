@@ -42,7 +42,8 @@ database.
     (task/chore tracking — issue #12); `HomeImprovementService` (projects
     and maintenance — issue #11); `HouseholdMeetingService` (meetings —
     issue #8); `HouseholdPollService` (household polls — issue #27);
-    `HouseholdMealPlanService` (meal planning — issue #25).
+    `HouseholdMealPlanService` (meal planning — issue #25);
+    `HouseholdInventoryService` (inventory/asset tracking — issue #23).
   - `Repository/` — Thin PDO data-access classes, one per table.
   - `Chat/` — LLM scaffolding (Fireworks AI) — `FireworksClient`,
     `ModelCatalog`/`CostCalculator` (per-model pricing), `ChatAgent` (the
@@ -159,6 +160,10 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/households/meal-plans/update` | `{"meal_plan_id", "planned_date", "meal_type", "title", "ingredients"?, "notes"?}` | Requires auth. `404` if no such meal plan; `403` if the caller isn't a member of its household. Any member may update it — see "Household meal planning" below. Same validation as create. Returns `{"meal_plan"}`. |
 | POST   | `/households/meal-plans/delete` | `{"meal_plan_id"}`                            | Requires auth. Same `404`/`403` rules as update. |
 | POST   | `/households/meal-plans/add-to-shopping-list` | `{"meal_plan_id"}`              | Requires auth. Same `404`/`403` rules as update. Splits the meal plan's `ingredients` field into one shopping-list item per non-blank line (via the same `HouseholdShoppingItemRepository::create()` every other shopping-list-adding route uses), skipping any line whose name already matches an unpurchased shopping-list item — see "Household meal planning" below. Returns `{"items": [...], "skipped"}` (`items` possibly empty, if `ingredients` is blank/unset or every line was skipped as a duplicate). Safe to call more than once; nothing is cleared or consumed. |
+| GET    | `/households/inventory`   | query param `household_id`                         | Requires auth; `403` if the caller isn't a member. Every item in the household's inventory — no privacy tiers, same as pets/contacts. Returns `{"items": [{"id","household_id","name","category","purchase_date","purchase_price","warranty_expires_at","serial_number","location","notes","service_contact_id","created_by_user_id","created_at","updated_at"}, ...]}`. |
+| POST   | `/households/inventory`   | `{"household_id", "name", "category"?, "purchase_date"?, "purchase_price"?, "warranty_expires_at"?, "serial_number"?, "location"?, "notes"?, "service_contact_id"?}` | Requires auth; `403` if the caller isn't a member. `name`: 1-150 chars; `category`: ≤50 chars; `purchase_date`/`warranty_expires_at`: `YYYY-MM-DD` if given; `purchase_price`: a non-negative number if given; `serial_number`: ≤100 chars; `location`: ≤150 chars; `notes`: ≤2000 chars; `service_contact_id`, if given, must be a contact (see `/households/contacts` above) in the same household. `400` on any validation failure. Returns `{"item"}`. |
+| POST   | `/households/inventory/update` | `{"item_id", "name", "category"?, "purchase_date"?, "purchase_price"?, "warranty_expires_at"?, "serial_number"?, "location"?, "notes"?, "service_contact_id"?}` | Requires auth. `404` if no such item; `403` if the caller isn't a member of its household. Any member may update it — see "Household inventory" below. Same validation as create. Returns `{"item"}`. |
+| POST   | `/households/inventory/delete` | `{"item_id"}`                                  | Requires auth. Same `404`/`403` rules as update. |
 
 Auth-requiring routes use the `session_token` cookie set by `/login`/`/me`
 (`401` if missing/invalid) — see `requireAuth()` in `public/index.php`.
@@ -1028,6 +1033,38 @@ the shopping list) rather than being a one-time consume.
 already uses, not the lenient `strtotime()` parsing calendar events/
 meetings use. `meal_type` is a genuinely closed set (`ENUM`), unlike the
 freeform category/label text columns elsewhere in this schema.
+
+## Household inventory
+
+Valuable household possessions (issue #23, `household_inventory_items`) —
+appliances, electronics, furniture — with purchase info, warranty
+expiration, serial number, and location. Same "no privacy tiers, any
+member can add/edit/remove" permission model as pets/contacts/staples — a
+shared household resource, not one member's private content.
+
+**No net-worth/value-tracking rollups for v1** — `purchase_price` is a
+plain optional field kept for reference (e.g. an insurance claim), never
+summed anywhere. That kind of aggregate belongs in a future finances
+tracker (issue #9) if it's ever wanted, per that issue's own open
+question, not this one.
+
+**No automatic warranty-expiration reminder for v1** — a member checks the
+list manually rather than this wiring up a #13 calendar event or #12 task
+when `warranty_expires_at` approaches, per the issue's own "stay something
+a member has to check manually for v1" framing.
+
+**`service_contact_id` is a single nullable link to `household_contacts`**
+(issue #16) for "who services/repairs this" — the simpler of the two
+options the issue named (one usual contact vs. a full service-history
+log), following the exact same shape and validation
+(`HouseholdInventoryService::validateServiceContactId()`) as
+`household_pets.vet_contact_id` already established: it must, if given,
+reference a contact already in the same household, and is cleared (`ON
+DELETE SET NULL`) rather than blocked if that contact is later deleted.
+
+`purchase_date`/`warranty_expires_at` are plain `DATE` columns, validated
+with the same strict `DateTime::createFromFormat('Y-m-d', ...)` round-trip
+check `due_at`/meal plan's `planned_date` already use.
 
 ## LLM usage (Fireworks AI)
 
