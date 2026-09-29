@@ -161,6 +161,8 @@ is considered complete.
    `php-app/README.md`'s "Task/chore tracking" section for the exact
    command and why this can't be part of the deploy workflow itself
    (cPanel cron entries aren't something a GitHub Actions run can create).
+   Add a second daily entry the same way for `bin/prune_old_messages.php`
+   — see "Cron setup" in "Household chat" for its own command.
 
 Once secrets are set and `main` has the schema-backed database ready, a
 push to `main` deploys automatically, applying any pending migration along

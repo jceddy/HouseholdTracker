@@ -298,6 +298,20 @@ above remains the only way migrations reach the deployed database.
   `household_pets`/`household_contacts`/`household_staple_items`. See
   "Household inventory" in `php-app/README.md`.
 
+- **Household chat** (`0041`, issue #28): `household_messages`
+  (`sender_user_id`, `body` a plain `VARCHAR(2000)`, `created_at`) --
+  indexed on `(household_id, id)` for the "everything newer than this id"
+  incremental-poll query the frontend uses instead of a real-time
+  transport (no websockets/SSE on this app's Bluehost shared hosting).
+  Channel-only for v1, no `recipient_user_id`/DMs, and no update/delete
+  route at all -- a message is permanent once sent, until a daily cron
+  script (`bin/prune_old_messages.php`) deletes anything older than 7
+  days -- age alone is the retention rule, unlike
+  `household_task_instances`' own resolved/pending cleanup pass. Same
+  no-privacy-tiers permission model as `household_pets`/
+  `household_contacts`/`household_staple_items`. See "Household chat" in
+  `php-app/README.md`.
+
 Whatever household-scoped tracker tables come next (finances, whatever the
 application actually ends up tracking) belong here too, as their own
 numbered migrations.

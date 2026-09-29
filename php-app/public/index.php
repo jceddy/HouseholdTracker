@@ -28,6 +28,7 @@ use HouseholdTracker\Household\HomeImprovementService;
 use HouseholdTracker\Household\HouseholdInventoryService;
 use HouseholdTracker\Household\HouseholdMealPlanService;
 use HouseholdTracker\Household\HouseholdMeetingService;
+use HouseholdTracker\Household\HouseholdMessageService;
 use HouseholdTracker\Household\HouseholdPollService;
 use HouseholdTracker\Household\HouseholdService;
 use HouseholdTracker\Household\InventoryItemNotFoundException;
@@ -60,6 +61,7 @@ use HouseholdTracker\Repository\HouseholdInviteRepository;
 use HouseholdTracker\Repository\HouseholdMealPlanRepository;
 use HouseholdTracker\Repository\HouseholdMeetingRepository;
 use HouseholdTracker\Repository\HouseholdMemberRepository;
+use HouseholdTracker\Repository\HouseholdMessageRepository;
 use HouseholdTracker\Repository\HouseholdNoteRepository;
 use HouseholdTracker\Repository\HouseholdPetRepository;
 use HouseholdTracker\Repository\HouseholdPollRepository;
@@ -372,6 +374,11 @@ $inventoryService = new HouseholdInventoryService(
     new HouseholdMemberRepository(),
     new HouseholdInventoryRepository(),
     new HouseholdContactRepository()
+);
+
+$messageService = new HouseholdMessageService(
+    new HouseholdMemberRepository(),
+    new HouseholdMessageRepository()
 );
 
 $accountExport = new AccountExportService(
@@ -1923,6 +1930,37 @@ if ($path === '/households/inventory/delete' && $method === 'POST') {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAHouseholdMemberException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/messages' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $householdId = (int) ($_GET['household_id'] ?? 0);
+    $sinceId = isset($_GET['since_id']) && $_GET['since_id'] !== '' ? (int) $_GET['since_id'] : null;
+
+    try {
+        $messages = $messageService->listMessages((int) $currentUser['id'], $householdId, $sinceId);
+        respond(200, ['status' => 'ok', 'messages' => $messages]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/households/messages' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $message = $messageService->sendMessage(
+            (int) $currentUser['id'],
+            (int) ($body['household_id'] ?? 0),
+            (string) ($body['body'] ?? '')
+        );
+        respond(201, ['status' => 'ok', 'message' => $message]);
+    } catch (NotAHouseholdMemberException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
