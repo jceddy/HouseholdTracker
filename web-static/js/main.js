@@ -14,6 +14,8 @@
     let currentMealPlanRangeStart = null;
     let editingMealPlanId = null;
     let editingInventoryItemId = null;
+    let currentChatLastMessageId = null;
+    let chatPollIntervalId = null;
 
     const user = await getCurrentUser();
     if (!user) {
@@ -235,6 +237,13 @@
         for (const panel of document.querySelectorAll('.tab-panel')) {
             panel.hidden = panel.id !== `tab-panel-${tabName}`;
         }
+        // Chat polling only runs while its own tab is the visible one --
+        // the cheapest way to avoid an unnecessary request every few
+        // seconds against shared hosting while looking at any other tab.
+        stopChatPolling();
+        if (tabName === 'chat') {
+            startChatPolling(currentHouseholdId);
+        }
     }
 
     for (const button of document.querySelectorAll('.tab-button')) {
@@ -320,6 +329,11 @@
         cancelMealPlanEdit();
         // Same reset idea, for the inventory tab's own edit-in-progress state.
         cancelInventoryEdit();
+        // Same reset idea, for the chat tab's own "what have we already
+        // seen" position -- a fresh household starts its polling (once the
+        // Chat tab is actually opened) from scratch, not from wherever the
+        // previous household's chat left off.
+        currentChatLastMessageId = null;
         await loadMembers(householdId);
         await loadNotes(householdId);
         await loadContacts(householdId);
@@ -340,6 +354,7 @@
         document.getElementById('household-detail-section').hidden = true;
         document.getElementById('create-household-section').hidden = false;
         currentHouseholdId = null;
+        stopChatPolling();
     }
 
     async function loadMembers(householdId) {
@@ -2048,6 +2063,74 @@
         }
     }
 
+    // Household chat (issue #28): a single household-wide channel, polled
+    // rather than pushed -- see migration 0041's own comment for why.
+    // Polling (startChatPolling()/stopChatPolling()) only runs while the
+    // Chat tab is the visible one (wired into activateTab() above), and
+    // only while a household is open (wired into closeHouseholdDetail()),
+    // to avoid an unnecessary request every few seconds the rest of the
+    // time -- the app's first tab to auto-refresh at all.
+    function formatMessageLabel(message) {
+        const sender = currentMembers.find((member) => member.user_id === message.sender_user_id);
+        const senderName = sender ? sender.username : 'Unknown';
+        const timeOpts = { hour: 'numeric', minute: '2-digit' };
+        const when = fromMysqlDateTime(message.created_at).toLocaleTimeString(undefined, timeOpts);
+        return `${senderName} (${when}): ${message.body}`;
+    }
+
+    function renderMessages(messages, append) {
+        const list = document.getElementById('household-message-list');
+        if (!append) {
+            list.innerHTML = '';
+            if (messages.length === 0) {
+                const li = document.createElement('li');
+                li.id = 'household-message-empty';
+                li.textContent = 'No messages yet.';
+                list.appendChild(li);
+                return;
+            }
+        } else if (messages.length > 0) {
+            const emptyLi = document.getElementById('household-message-empty');
+            if (emptyLi) {
+                emptyLi.remove();
+            }
+        }
+
+        for (const message of messages) {
+            const { li } = buildListItem(formatMessageLabel(message));
+            list.appendChild(li);
+            currentChatLastMessageId = message.id;
+        }
+    }
+
+    async function loadMessages(householdId, sinceId) {
+        const query = sinceId !== null
+            ? `household_id=${householdId}&since_id=${sinceId}`
+            : `household_id=${householdId}`;
+        const { response, body } = await apiRequest(`/households/messages?${query}`);
+        if (!response.ok) {
+            return;
+        }
+        renderMessages(body.messages, sinceId !== null);
+    }
+
+    function startChatPolling(householdId) {
+        if (householdId === null || chatPollIntervalId !== null) {
+            return;
+        }
+        loadMessages(householdId, null);
+        chatPollIntervalId = setInterval(() => {
+            loadMessages(householdId, currentChatLastMessageId);
+        }, 4000);
+    }
+
+    function stopChatPolling() {
+        if (chatPollIntervalId !== null) {
+            clearInterval(chatPollIntervalId);
+            chatPollIntervalId = null;
+        }
+    }
+
     // Household meetings (issue #8). Same "no privacy tiers, any member
     // can add/edit/remove" permission model as pets/contacts -- a meeting
     // log is shared household information. A meeting's own action-item
@@ -2975,6 +3058,27 @@
         messageEl.textContent = (body && body.message) || 'Could not save inventory item.';
         messageEl.className = 'message message--error';
         messageEl.hidden = false;
+    });
+
+    document.getElementById('household-message-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const errorEl = document.getElementById('household-message-error');
+        errorEl.hidden = true;
+
+        const { response, body } = await apiRequest('/households/messages', {
+            method: 'POST',
+            body: JSON.stringify({ household_id: currentHouseholdId, body: form.body.value }),
+        });
+
+        if (response.ok) {
+            form.reset();
+            await loadMessages(currentHouseholdId, currentChatLastMessageId);
+            return;
+        }
+
+        errorEl.textContent = (body && body.message) || 'Could not send message.';
+        errorEl.hidden = false;
     });
 
     document.getElementById('household-meeting-detail-close').addEventListener('click', closeMeetingDetail);

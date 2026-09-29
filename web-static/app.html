@@ -63,6 +63,7 @@
             <button type="button" class="tab-button" data-tab="polls" role="tab" aria-selected="false">Polls</button>
             <button type="button" class="tab-button" data-tab="meal-plans" role="tab" aria-selected="false">Meal Plan</button>
             <button type="button" class="tab-button" data-tab="inventory" role="tab" aria-selected="false">Inventory</button>
+            <button type="button" class="tab-button" data-tab="chat" role="tab" aria-selected="false">Chat</button>
         </div>
 
         <div class="tab-panel" id="tab-panel-dashboard" role="tabpanel">
@@ -538,6 +539,17 @@
                     <button type="button" id="household-inventory-cancel-button" class="button--compact" hidden>Cancel</button>
                 </div>
                 <p id="household-inventory-message" class="message" hidden></p>
+            </form>
+        </div>
+
+        <div class="tab-panel" id="tab-panel-chat" role="tabpanel" hidden>
+            <ul id="household-message-list"></ul>
+            <form id="household-message-form">
+                <label>Message
+                    <textarea id="household-message-body" name="body" required maxlength="2000"></textarea>
+                </label>
+                <button type="submit">Send</button>
+                <p id="household-message-error" class="message message--error" hidden></p>
             </form>
         </div>
 
